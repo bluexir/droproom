@@ -1,0 +1,32 @@
+# dependencies
+node_modules
+
+# Next.js
+.next
+out
+
+# production
+build
+dist
+
+# env
+.env*
+!.env.example
+
+# logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# misc
+.DS_Store
+Thumbs.db
+*.pem
+*.tsbuildinfo
+
+# source logo exports kept outside the app bundle
+Gemini_Generated_Image_*.png
+
+# Vercel
+.vercel
