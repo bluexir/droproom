@@ -31,7 +31,7 @@ describe("DroproomDrops", async function () {
     const createHash = await creatorContract.write.createDrop(["ipfs://drop-1", 25, 0n, 500n]);
     await publicClient.waitForTransactionReceipt({ hash: createHash });
 
-    const drop = await contract.read.drops([1n]);
+    const drop = (await contract.read.drops([1n])) as readonly [string, number, bigint, boolean, string];
     assert.equal(drop[0].toLowerCase(), creator.account.address.toLowerCase());
     assert.equal(drop[1], 25);
     assert.equal(drop[2], 0n);

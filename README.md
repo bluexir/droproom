@@ -19,7 +19,7 @@ npm install
 npm run dev
 ```
 
-Copy `.env.example` to `.env.local` for local testing. Never commit `.env.local`.
+Copy `.env.example` to `.env.local` for local testing and local contract deployment. Never commit `.env.local`.
 
 ## Environment Variables
 
