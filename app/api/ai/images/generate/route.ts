@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { AiImageGenerationError, generateAiImages } from "@/lib/ai-images";
 import { AI_DAILY_JOB_LIMIT, STYLE_CHIPS, type StyleChipId } from "@/lib/constants";
 
 export const runtime = "nodejs";
@@ -100,7 +101,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Daily AI limit reached." }, { status: 429 });
   }
 
-  const openaiKey = process.env.OPENAI_API_KEY;
   const mockMode = process.env.AI_MOCK_MODE === "true";
   const composedPrompt = [
     parsed.prompt,
@@ -110,55 +110,26 @@ export async function POST(request: Request) {
     .filter(Boolean)
     .join(", ");
 
-  if (!openaiKey && mockMode) {
+  if (mockMode) {
     return NextResponse.json({
       images: [0, 1, 2, 3].map((index) => mockImage(parsed.prompt, index)),
       mock: true
     });
   }
 
-  if (!openaiKey) {
-    return NextResponse.json({ error: "AI is not configured." }, { status: 503 });
-  }
-
   try {
-    const response = await fetch("https://api.openai.com/v1/images/generations", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${openaiKey}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        model: process.env.OPENAI_IMAGE_MODEL ?? "gpt-image-1.5",
-        prompt: composedPrompt,
-        n: 4,
-        size: "1024x1024",
-        quality: "low",
-        output_format: "png"
-      })
-    });
-
-    const payload = (await response.json()) as {
-      data?: Array<{ b64_json?: string; url?: string }>;
-      error?: { message?: string };
-    };
-
-    if (!response.ok) {
-      console.error("OpenAI image generation failed", payload.error?.message ?? response.statusText);
-      return NextResponse.json({ error: "AI image generation failed." }, { status: 502 });
-    }
-
-    const images =
-      payload.data
-        ?.map((item) => (item.b64_json ? `data:image/png;base64,${item.b64_json}` : item.url))
-        .filter((value): value is string => Boolean(value)) ?? [];
-
-    if (!images.length) {
-      return NextResponse.json({ error: "OpenAI returned no images." }, { status: 502 });
-    }
-
+    const images = await generateAiImages({ prompt: composedPrompt, count: 4 });
     return NextResponse.json({ images });
   } catch (error) {
+    if (error instanceof AiImageGenerationError) {
+      console.error("AI image generation failed", {
+        status: error.status,
+        message: error.message
+      });
+
+      return NextResponse.json({ error: error.publicMessage }, { status: error.status });
+    }
+
     console.error("AI image route failed", error);
     return NextResponse.json({ error: "AI image generation failed." }, { status: 500 });
   }

@@ -9,6 +9,11 @@ out
 build
 dist
 
+# Hardhat
+artifacts
+cache
+typechain-types
+
 # env
 .env*
 !.env.example
