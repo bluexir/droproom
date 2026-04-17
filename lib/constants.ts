@@ -6,6 +6,7 @@ export const PLATFORM_WALLET =
 export const EDITION_MAX = 999;
 export const TOKEN_UNLOCK_MIN_EDITION = 25;
 export const AI_DAILY_JOB_LIMIT = 10;
+export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 
 export const STYLE_CHIPS = [
   { id: "minimal", label: "Minimal", prompt: "minimal, clean composition, strong negative space" },
@@ -18,4 +19,5 @@ export const STYLE_CHIPS = [
 
 export type StyleChipId = (typeof STYLE_CHIPS)[number]["id"];
 
-export const ACCEPTED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp"];
+export const ACCEPTED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif"];
+export const PINATA_UPLOAD_MIME_TYPES = [...ACCEPTED_IMAGE_TYPES, "image/svg+xml", "application/json"];

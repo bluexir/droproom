@@ -1,0 +1,176 @@
+import {
+  createWalletClient,
+  custom,
+  getAddress,
+  numberToHex,
+  type Address,
+  type Hex,
+  type WalletClient
+} from "viem";
+
+import { BASE_EXPLORER_URL, BASE_PUBLIC_RPC_URL, DROPROOM_CHAIN, DROPROOM_CHAIN_ID } from "@/lib/wallet/base";
+
+export type Eip1193Provider = {
+  request: (args: { method: string; params?: readonly unknown[] | Record<string, unknown> }) => Promise<unknown>;
+  on?: (event: string, listener: (...args: unknown[]) => void) => void;
+  removeListener?: (event: string, listener: (...args: unknown[]) => void) => void;
+  isBase?: boolean;
+  isCoinbaseWallet?: boolean;
+  providers?: Eip1193Provider[];
+  selectedProvider?: Eip1193Provider;
+};
+
+export class WalletProviderError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "WalletProviderError";
+  }
+}
+
+export function getInjectedWalletProvider() {
+  if (typeof window === "undefined") return null;
+
+  const ethereum = (window as Window & { ethereum?: Eip1193Provider }).ethereum;
+  if (!ethereum) return null;
+
+  const candidates = [
+    ...(Array.isArray(ethereum.providers) ? ethereum.providers : []),
+    ethereum.selectedProvider,
+    ethereum
+  ].filter((provider): provider is Eip1193Provider => Boolean(provider?.request));
+
+  return candidates.find((provider) => provider.isBase || provider.isCoinbaseWallet) ?? candidates[0] ?? null;
+}
+
+export function requireInjectedWalletProvider(provider = getInjectedWalletProvider()) {
+  if (!provider) {
+    throw new WalletProviderError("No wallet provider found. Open Droproom in a wallet-enabled browser.");
+  }
+
+  return provider;
+}
+
+export function parseWalletChainId(chainId: unknown) {
+  if (typeof chainId === "number" && Number.isInteger(chainId)) return chainId;
+
+  if (typeof chainId === "bigint") return Number(chainId);
+
+  if (typeof chainId === "string") {
+    const trimmed = chainId.trim();
+    if (!trimmed) return null;
+
+    const parsed = trimmed.startsWith("0x") ? Number.parseInt(trimmed, 16) : Number.parseInt(trimmed, 10);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  return null;
+}
+
+export async function getWalletChainId(provider = requireInjectedWalletProvider()) {
+  const chainId = await provider.request({ method: "eth_chainId" });
+  const parsed = parseWalletChainId(chainId);
+
+  if (!parsed) {
+    throw new WalletProviderError("Wallet returned an invalid chain id.");
+  }
+
+  return parsed;
+}
+
+export async function getConnectedWalletAccounts(provider = requireInjectedWalletProvider()) {
+  const accounts = await provider.request({ method: "eth_accounts" });
+
+  if (!Array.isArray(accounts)) return [];
+
+  return accounts.filter((account): account is string => typeof account === "string").map((account) => getAddress(account));
+}
+
+export async function requestWalletAccount(provider = requireInjectedWalletProvider()) {
+  const accounts = await provider.request({ method: "eth_requestAccounts" });
+
+  if (!Array.isArray(accounts) || typeof accounts[0] !== "string") {
+    throw new WalletProviderError("Wallet connection did not return an account.");
+  }
+
+  return getAddress(accounts[0]);
+}
+
+export function assertBaseMainnetChain(chainId: number | null | undefined) {
+  if (chainId !== DROPROOM_CHAIN_ID) {
+    throw new WalletProviderError(`Wrong network. Switch to Base mainnet (${DROPROOM_CHAIN_ID}).`);
+  }
+
+  return chainId;
+}
+
+export async function switchWalletToBaseMainnet(provider = requireInjectedWalletProvider()) {
+  const chainId = numberToHex(DROPROOM_CHAIN_ID);
+
+  try {
+    await provider.request({
+      method: "wallet_switchEthereumChain",
+      params: [{ chainId }]
+    });
+  } catch (error) {
+    if (!isUnknownChainError(error)) throw error;
+
+    await provider.request({
+      method: "wallet_addEthereumChain",
+      params: [
+        {
+          blockExplorerUrls: [BASE_EXPLORER_URL],
+          chainId,
+          chainName: DROPROOM_CHAIN.name,
+          nativeCurrency: DROPROOM_CHAIN.nativeCurrency,
+          rpcUrls: [BASE_PUBLIC_RPC_URL]
+        }
+      ]
+    });
+  }
+
+  return getWalletChainId(provider);
+}
+
+export async function ensureWalletOnBaseMainnet(provider = requireInjectedWalletProvider()) {
+  const chainId = await getWalletChainId(provider);
+  if (chainId === DROPROOM_CHAIN_ID) return chainId;
+
+  const nextChainId = await switchWalletToBaseMainnet(provider);
+  return assertBaseMainnetChain(nextChainId);
+}
+
+export async function assertWalletClientOnBaseMainnet(walletClient: Pick<WalletClient, "getChainId">) {
+  const chainId = await walletClient.getChainId();
+  return assertBaseMainnetChain(chainId);
+}
+
+export function createDroproomWalletClient(provider = requireInjectedWalletProvider(), account?: Address) {
+  return createWalletClient({
+    account,
+    chain: DROPROOM_CHAIN,
+    transport: custom(provider)
+  });
+}
+
+export function asAddress(value: string) {
+  return getAddress(value);
+}
+
+export function asHex(value: string) {
+  if (!value.startsWith("0x")) {
+    throw new WalletProviderError("Expected a 0x-prefixed hex value.");
+  }
+
+  return value as Hex;
+}
+
+function isUnknownChainError(error: unknown) {
+  if (!error || typeof error !== "object") return false;
+
+  const code = "code" in error ? (error as { code?: unknown }).code : undefined;
+  if (code === 4902) return true;
+  if (code !== -32603) return false;
+
+  const message = "message" in error ? String((error as { message?: unknown }).message).toLowerCase() : "";
+  return message.includes("unknown chain") || message.includes("unrecognized chain") || message.includes("not added");
+}

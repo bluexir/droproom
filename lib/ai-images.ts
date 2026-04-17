@@ -45,7 +45,7 @@ async function generateWithCloudflare(prompt: string, count: number) {
   const accountId = process.env.CLOUDFLARE_ACCOUNT_ID?.trim();
   const token = process.env.CLOUDFLARE_API_TOKEN?.trim();
   const model = sanitizeCloudflareModel(
-    process.env.CLOUDFLARE_AI_MODEL?.trim() || "@cf/bytedance/stable-diffusion-xl-lightning"
+    process.env.CLOUDFLARE_AI_MODEL?.trim() || "@cf/black-forest-labs/flux-1-schnell"
   );
 
   if (!accountId || !token) {
@@ -62,29 +62,39 @@ async function generateWithCloudflare(prompt: string, count: number) {
 
   const jobs = Array.from({ length: count }, (_, index) => {
     const seed = randomSeed(index);
-    return fetchCloudflareImage(endpoint, token, prompt, seed);
+    return fetchCloudflareImage(endpoint, token, model, prompt, seed);
   });
 
   const images = await Promise.all(jobs);
   return images.filter(Boolean);
 }
 
-async function fetchCloudflareImage(endpoint: string, token: string, prompt: string, seed: number) {
+async function fetchCloudflareImage(endpoint: string, token: string, model: string, prompt: string, seed: number) {
+  const isFluxModel = model.includes("flux");
   const response = await fetch(endpoint, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json"
     },
-    body: JSON.stringify({
-      prompt,
-      negative_prompt: "text, watermark, logo, signature, blurry, low quality, distorted anatomy",
-      width: 1024,
-      height: 1024,
-      num_steps: 8,
-      guidance: 7.5,
-      seed
-    })
+    body: JSON.stringify(
+      isFluxModel
+        ? {
+            prompt,
+            steps: 4,
+            seed
+          }
+        : {
+            prompt,
+            negative_prompt: "text, watermark, logo, signature, blurry, low quality, distorted anatomy",
+            width: 1024,
+            height: 1024,
+            num_steps: 8,
+            guidance: 7.5,
+            seed
+          }
+    ),
+    signal: AbortSignal.timeout(45_000)
   });
 
   if (!response.ok) {

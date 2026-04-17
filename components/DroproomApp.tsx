@@ -2,89 +2,28 @@
 
 import Image from "next/image";
 import { useEffect, useState, type ReactNode } from "react";
+import { parseEther } from "viem";
 
 import {
   ACCEPTED_IMAGE_TYPES,
   AI_DAILY_JOB_LIMIT,
   EDITION_MAX,
+  MAX_UPLOAD_BYTES,
   PLATFORM_FEE_PERCENT,
   STYLE_CHIPS,
   TOKEN_UNLOCK_MIN_EDITION,
   type StyleChipId
 } from "@/lib/constants";
+import { useDroproomContract } from "@/hooks/useDroproomContract";
+import { dataUrlToFile, uploadFileToPinata, uploadJsonToPinata } from "@/lib/client/pinata-upload";
 import { getCreatorTokenEligibility } from "@/lib/eligibility";
 import type { Drop, StartMode, StudioDraft } from "@/lib/types";
 
 type View = "explore" | "create" | "dashboard" | "library";
 type CreateStep = "start" | "studio" | "review";
 
-type EthereumProvider = {
-  request: (args: { method: string; params?: unknown[] }) => Promise<unknown>;
-};
-
-declare global {
-  interface Window {
-    ethereum?: EthereumProvider;
-  }
-}
-
-const storageKey = "droproom:drops:v1";
 const libraryKey = "droproom:library:v1";
-const walletKey = "droproom:wallet:v1";
 const brandIconPrimary = "/brand/droproom-premium-hero.png";
-const brandIconSecondary = "/brand/droproom-premium-hero1.png";
-const fallbackArtwork = brandIconPrimary;
-
-const starterDrops: Drop[] = [
-  {
-    id: "genesis-pass",
-    title: "Genesis Support Pass",
-    description: "A limited supporter drop for the first collectors entering Droproom.",
-    image: brandIconPrimary,
-    creator: "Droproom Studio",
-    price: 0,
-    isFree: true,
-    edition: 99,
-    minted: 61,
-    status: "live",
-    createdAt: new Date().toISOString(),
-    collectors: [],
-    previewOnly: true,
-    featured: true
-  },
-  {
-    id: "blue-room",
-    title: "Blue Room Study",
-    description: "A clean cyan edition card for creator-led drops on Base.",
-    image: brandIconSecondary,
-    creator: "bluexir",
-    price: 1,
-    isFree: false,
-    edition: 120,
-    minted: 120,
-    status: "sold-out",
-    createdAt: new Date(Date.now() - 86400000).toISOString(),
-    collectors: [],
-    previewOnly: true,
-    featured: true
-  },
-  {
-    id: "soft-launch",
-    title: "Soft Launch Collectible",
-    description: "A quiet launch card for people who like early internet objects.",
-    image: brandIconPrimary,
-    creator: "Droproom",
-    price: 0.5,
-    isFree: false,
-    edition: 250,
-    minted: 88,
-    status: "live",
-    createdAt: new Date(Date.now() - 172800000).toISOString(),
-    collectors: [],
-    previewOnly: true,
-    featured: false
-  }
-];
 
 const defaultDraft: StudioDraft = {
   title: "Untitled Drop",
@@ -100,17 +39,22 @@ const defaultDraft: StudioDraft = {
 
 function createBlankArtwork(title = "DROPROOM", background = "#07111f") {
   const svg = `<svg width="1200" height="1200" viewBox="0 0 1200 1200" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <rect width="1200" height="1200" rx="96" fill="${background}"/>
-    <circle cx="600" cy="600" r="418" fill="url(#g)" opacity=".76"/>
-    <path d="M600 244L872 401V715L600 872L328 715V401L600 244Z" stroke="white" stroke-width="26" opacity=".9"/>
-    <path d="M600 328L712 520H488L600 328Z" fill="white" opacity=".95"/>
-    <path d="M412 724L600 834L788 724" stroke="white" stroke-width="34" stroke-linecap="round" opacity=".9"/>
-    <text x="600" y="1010" text-anchor="middle" fill="white" font-family="Arial, sans-serif" font-size="56" font-weight="700" letter-spacing="10">${title.slice(0, 18)}</text>
+    <rect width="1200" height="1200" rx="116" fill="${background}"/>
+    <rect x="88" y="88" width="1024" height="1024" rx="86" fill="url(#card)" stroke="rgba(255,255,255,.24)" stroke-width="3"/>
+    <circle cx="812" cy="266" r="360" fill="#31F3E9" opacity=".18"/>
+    <circle cx="338" cy="914" r="420" fill="#196DFF" opacity=".2"/>
+    <path d="M320 410H880C917.555 410 948 440.445 948 478V736C948 773.555 917.555 804 880 804H320C282.445 804 252 773.555 252 736V478C252 440.445 282.445 410 320 410Z" fill="rgba(255,255,255,.065)" stroke="rgba(255,255,255,.24)" stroke-width="3"/>
+    <path d="M388 720L524 586L620 676L706 592L838 720" stroke="white" stroke-width="28" stroke-linecap="round" stroke-linejoin="round" opacity=".82"/>
+    <circle cx="802" cy="504" r="42" fill="white" opacity=".84"/>
+    <path d="M600 208L780 312V520L600 624L420 520V312L600 208Z" stroke="#31F3E9" stroke-width="18" opacity=".8"/>
+    <path d="M600 276L674 402H526L600 276Z" fill="white" opacity=".88"/>
+    <text x="600" y="930" text-anchor="middle" fill="white" font-family="Verdana, Arial, sans-serif" font-size="46" font-weight="700" letter-spacing="9">${title.slice(0, 18).toUpperCase()}</text>
+    <text x="600" y="990" text-anchor="middle" fill="#8BF5FF" font-family="Verdana, Arial, sans-serif" font-size="24" font-weight="700" letter-spacing="8">LIMITED BASE DROP</text>
     <defs>
-      <radialGradient id="g" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(748 318) rotate(117) scale(782)">
+      <radialGradient id="card" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(770 250) rotate(120) scale(980)">
         <stop stop-color="#26F0E4"/>
-        <stop offset=".55" stop-color="#1575FF"/>
-        <stop offset="1" stop-color="#07111F"/>
+        <stop offset=".48" stop-color="#1575FF" stop-opacity=".42"/>
+        <stop offset="1" stop-color="#07111F" stop-opacity=".96"/>
       </radialGradient>
     </defs>
   </svg>`;
@@ -128,6 +72,25 @@ function safeNumber(value: string, fallback: number) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function slugify(value: string) {
+  return (
+    value
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 54) || "droproom-drop"
+  );
+}
+
+function extensionForDataUrl(dataUrl: string) {
+  if (dataUrl.startsWith("data:image/gif")) return "gif";
+  if (dataUrl.startsWith("data:image/jpeg")) return "jpg";
+  if (dataUrl.startsWith("data:image/webp")) return "webp";
+  if (dataUrl.startsWith("data:image/svg+xml")) return "svg";
+  return "png";
+}
+
 function safeStorageSet(key: string, value: unknown) {
   try {
     window.localStorage.setItem(key, JSON.stringify(value));
@@ -135,35 +98,6 @@ function safeStorageSet(key: string, value: unknown) {
     // Large uploaded/generated images can exceed localStorage quota. Keep the live
     // in-memory preview working and avoid breaking the app during testing.
     window.localStorage.removeItem(key);
-  }
-}
-
-function prepareDropsForStorage(drops: Drop[]) {
-  return drops.map((drop) => ({
-    ...drop,
-    image: drop.image.startsWith("data:") ? fallbackArtwork : drop.image,
-    previewImage: undefined
-  }));
-}
-
-function migrateBrandImage(drop: Drop) {
-  if (!drop.image.startsWith("/brand/logo-")) return drop;
-
-  return {
-    ...drop,
-    image: drop.id === "blue-room" ? brandIconSecondary : brandIconPrimary
-  };
-}
-
-function parseDrops(value: string | null) {
-  if (!value) return null;
-  try {
-    const parsed = JSON.parse(value) as Drop[];
-    if (!Array.isArray(parsed)) return null;
-    return parsed.map(migrateBrandImage);
-  } catch {
-    window.localStorage.removeItem(storageKey);
-    return null;
   }
 }
 
@@ -179,66 +113,89 @@ function parseLibrary(value: string | null) {
 }
 
 export function DroproomApp() {
+  const droproom = useDroproomContract();
   const [view, setView] = useState<View>("explore");
   const [createStep, setCreateStep] = useState<CreateStep>("start");
   const [startMode, setStartMode] = useState<StartMode>("upload");
   const [draft, setDraft] = useState<StudioDraft>({
     ...defaultDraft,
-    image: createBlankArtwork("DROPROOM")
+    image: ""
   });
-  const [drops, setDrops] = useState<Drop[]>(starterDrops);
+  const [drops, setDrops] = useState<Drop[]>([]);
   const [libraryByWallet, setLibraryByWallet] = useState<Record<string, string[]>>({});
-  const [selectedDropId, setSelectedDropId] = useState<string | null>(starterDrops[0]?.id ?? null);
+  const [selectedDropId, setSelectedDropId] = useState<string | null>(null);
   const [aiPrompt, setAiPrompt] = useState("");
   const [styleChip, setStyleChip] = useState<StyleChipId>("premium");
   const [aiImages, setAiImages] = useState<string[]>([]);
   const [aiJobsUsed, setAiJobsUsed] = useState(0);
   const [aiLoading, setAiLoading] = useState(false);
   const [notice, setNotice] = useState("");
-  const [walletAddress, setWalletAddress] = useState("");
   const [walletLoading, setWalletLoading] = useState(false);
   const [publishPending, setPublishPending] = useState(false);
   const [mintPending, setMintPending] = useState(false);
-  const hasCustomArtwork = Boolean(draft.image && !draft.image.includes("DROPROOM"));
+  const [dropsLoading, setDropsLoading] = useState(true);
+  const hasArtwork = Boolean(draft.image);
+  const walletAddress = droproom.account ?? "";
 
   useEffect(() => {
-    const savedDrops = parseDrops(window.localStorage.getItem(storageKey));
     const savedLibrary = parseLibrary(window.localStorage.getItem(libraryKey));
-    const savedWallet = window.localStorage.getItem(walletKey);
-
-    if (savedDrops) setDrops(savedDrops);
     setLibraryByWallet(savedLibrary);
-    if (savedWallet) setWalletAddress(savedWallet);
+    void loadDrops();
   }, []);
-
-  useEffect(() => {
-    safeStorageSet(storageKey, prepareDropsForStorage(drops));
-  }, [drops]);
 
   useEffect(() => {
     safeStorageSet(libraryKey, libraryByWallet);
   }, [libraryByWallet]);
 
+  useEffect(() => {
+    if (!walletAddress) return;
+    void loadMintLibrary(walletAddress);
+  }, [walletAddress]);
+
   const selectedDrop = drops.find((drop) => drop.id === selectedDropId) ?? drops[0];
   const activeLibrary = walletAddress ? libraryByWallet[walletAddress.toLowerCase()] ?? [] : [];
-  const creatorDrops = drops.filter((drop) => drop.creatorAddress === walletAddress || drop.creator === "You");
+  const creatorDrops = drops.filter((drop) => drop.creatorAddress?.toLowerCase() === walletAddress.toLowerCase());
+  const soldOutDrops = drops.filter((drop) => drop.status === "sold-out" || drop.minted >= drop.edition).slice(0, 4);
   const soldOutCount = creatorDrops.filter((drop) => drop.status === "sold-out" && drop.edition >= TOKEN_UNLOCK_MIN_EDITION).length;
   const tokenEligibility = getCreatorTokenEligibility(drops, walletAddress);
 
-  async function connectWallet() {
-    if (!window.ethereum) {
-      setNotice("No wallet provider found. Open Droproom inside Base App or a wallet-enabled browser.");
-      return;
+  async function loadDrops() {
+    try {
+      setDropsLoading(true);
+      const response = await fetch("/api/drops", { cache: "no-store" });
+      const payload = (await response.json()) as { drops?: Drop[]; error?: string };
+      const nextDrops = payload.drops ?? [];
+      setDrops(nextDrops);
+      setSelectedDropId((current) => current ?? nextDrops[0]?.id ?? null);
+      if (!response.ok && payload.error) setNotice(payload.error);
+    } catch {
+      setNotice("Live drops could not be loaded yet.");
+    } finally {
+      setDropsLoading(false);
     }
+  }
 
+  async function loadMintLibrary(address: string) {
+    try {
+      const response = await fetch(`/api/mints?wallet=${encodeURIComponent(address.toLowerCase())}`, { cache: "no-store" });
+      const payload = (await response.json()) as { mints?: Array<{ token_id: string }> };
+      const tokenIds = payload.mints?.map((mint) => mint.token_id) ?? [];
+      setLibraryByWallet((current) => ({
+        ...current,
+        [address.toLowerCase()]: tokenIds
+      }));
+    } catch {
+      // Library is helpful, but mint ownership is still enforced by the chain.
+    }
+  }
+
+  async function connectWallet() {
     try {
       setWalletLoading(true);
-      const accounts = (await window.ethereum.request({ method: "eth_requestAccounts" })) as string[];
-      const nextWallet = accounts[0] ?? "";
-      setWalletAddress(nextWallet);
-      if (nextWallet) window.localStorage.setItem(walletKey, nextWallet);
-    } catch {
-      setNotice("Wallet connection was not completed.");
+      const nextWallet = await droproom.connect();
+      setNotice(`Connected on Base: ${shortAddress(nextWallet)}`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Wallet connection was not completed.");
     } finally {
       setWalletLoading(false);
     }
@@ -254,7 +211,7 @@ export function DroproomApp() {
     setDraft({
       ...defaultDraft,
       title: mode === "blank" ? "Blank Canvas Drop" : mode === "ai" ? "AI Artwork Drop" : "Uploaded Artwork Drop",
-      image: mode === "blank" ? createBlankArtwork("BLANK CANVAS") : createBlankArtwork("DROPROOM")
+      image: mode === "blank" ? createBlankArtwork("BLANK CANVAS") : ""
     });
 
     if (mode === "blank") {
@@ -270,7 +227,12 @@ export function DroproomApp() {
     if (!file) return;
 
     if (!ACCEPTED_IMAGE_TYPES.includes(file.type)) {
-      setNotice("Only PNG, JPG, and WEBP files are supported in V1.");
+      setNotice("Only PNG, JPG, WEBP, and GIF files are supported in V1.");
+      return;
+    }
+
+    if (file.size > MAX_UPLOAD_BYTES) {
+      setNotice("Keep artwork under 10 MB. One-second looping GIFs are supported.");
       return;
     }
 
@@ -306,13 +268,13 @@ export function DroproomApp() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ prompt: aiPrompt, styleChipIds: [styleChip] })
       });
-      const payload = (await response.json()) as { images?: string[]; error?: string; mock?: boolean };
+      const payload = (await response.json()) as { images?: string[]; error?: string };
 
       if (!response.ok || !payload.images?.length) throw new Error(payload.error ?? "AI generation failed.");
 
       setAiImages(payload.images);
       setAiJobsUsed((current) => current + 1);
-      setNotice(payload.mock ? "AI mock mode is active until OPENAI_API_KEY is configured." : "AI generated 4 variations.");
+      setNotice("AI generated 4 variations.");
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "AI generation failed.");
     } finally {
@@ -330,72 +292,198 @@ export function DroproomApp() {
     setCreateStep("review");
   }
 
-  function publishDrop() {
+  async function publishDrop() {
     if (publishPending) return;
-    setPublishPending(true);
-    const edition = Math.min(Math.max(Math.round(draft.edition), 1), EDITION_MAX);
-    const price = draft.isFree ? 0 : Math.max(draft.price, 0);
-    const drop: Drop = {
-      id: `${Date.now()}-${draft.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 36)}`,
-      title: draft.title.trim() || "Untitled Drop",
-      description: draft.description.trim() || "A limited edition NFT drop created on Droproom.",
-      image: draft.image || createBlankArtwork(draft.title),
-      creator: walletAddress ? shortAddress(walletAddress) : "You",
-      creatorAddress: walletAddress,
-      price,
-      isFree: price === 0,
-      edition,
-      minted: 0,
-      status: "live",
-      createdAt: new Date().toISOString(),
-      collectors: [],
-      previewImage: draft.image.startsWith("data:") ? draft.image : undefined,
-      previewOnly: true
-    };
 
-    setDrops((current) => [drop, ...current]);
-    setSelectedDropId(drop.id);
-    setCreateStep("start");
-    setDraft({ ...defaultDraft, image: createBlankArtwork("DROPROOM") });
-    setAiPrompt("");
-    setAiImages([]);
-    setPublishPending(false);
-    setView("explore");
-    setNotice("Preview drop published. Full onchain minting will be connected in the next production layer.");
+    try {
+      setPublishPending(true);
+      setNotice("Uploading artwork to IPFS...");
+      const title = draft.title.trim() || "Untitled Drop";
+      const description = draft.description.trim() || "A limited edition NFT drop created on Droproom.";
+      const edition = Math.min(Math.max(Math.round(draft.edition), 1), EDITION_MAX);
+      const price = draft.isFree ? 0 : Math.max(draft.price, 0);
+      const priceWei = parseEther(price.toString());
+      if (!draft.image) {
+        throw new Error("Add artwork before publishing.");
+      }
+      const artwork = dataUrlToFile(draft.image, `${slugify(title)}.${extensionForDataUrl(draft.image)}`);
+      const imageUpload = await uploadFileToPinata(artwork);
+      const metadata = {
+        name: title,
+        description,
+        image: imageUpload.ipfsUri,
+        attributes: [
+          { trait_type: "Platform", value: "Droproom" },
+          { trait_type: "Network", value: "Base" },
+          { trait_type: "Edition Size", value: edition },
+          { trait_type: "Media Type", value: imageUpload.mimeType }
+        ]
+      };
+
+      setNotice("Uploading NFT metadata to IPFS...");
+      const metadataUpload = await uploadJsonToPinata(`${slugify(title)}-metadata.json`, metadata);
+
+      setNotice("Confirm the Base transaction in your wallet. You pay network gas.");
+      const result = await droproom.createDrop({
+        maxSupply: edition,
+        metadataURI: metadataUpload.ipfsUri,
+        price: priceWei,
+        royaltyBps: 0
+      });
+      const created = result.events.created[0];
+
+      if (!created) {
+        throw new Error("Drop transaction completed, but the created token event was not found.");
+      }
+
+      const drop: Drop = {
+        basescanUrl: result.basescanUrl,
+        collectors: [],
+        createdAt: new Date().toISOString(),
+        creator: shortAddress(created.creator),
+        creatorAddress: created.creator,
+        description,
+        edition,
+        id: created.tokenId.toString(),
+        image: imageUpload.gatewayUrl,
+        imageIpfsUri: imageUpload.ipfsUri,
+        isFree: price === 0,
+        mediaType: imageUpload.mimeType,
+        metadataUri: metadataUpload.ipfsUri,
+        minted: 0,
+        price,
+        priceWei: priceWei.toString(),
+        status: "live",
+        title,
+        tokenId: created.tokenId.toString(),
+        txHash: result.hash
+      };
+
+      setDrops((current) => [drop, ...current.filter((item) => item.id !== drop.id)]);
+      setSelectedDropId(drop.id);
+      setCreateStep("start");
+      setDraft({ ...defaultDraft, image: "" });
+      setAiPrompt("");
+      setAiImages([]);
+      setView("explore");
+      setNotice(`Drop is live on Base. Token #${drop.tokenId}. Indexing now...`);
+
+      try {
+        const indexedDrop = await saveDrop(drop);
+        setDrops((current) => [indexedDrop, ...current.filter((item) => item.id !== indexedDrop.id)]);
+        setSelectedDropId(indexedDrop.id);
+        setNotice(`Drop is live and indexed on Base. Token #${indexedDrop.tokenId}.`);
+      } catch (indexError) {
+        setNotice(
+          indexError instanceof Error
+            ? `Onchain success, index needs retry: ${indexError.message}`
+            : "Onchain success, but the index needs retry."
+        );
+      }
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Drop publish failed.");
+    } finally {
+      setPublishPending(false);
+    }
   }
 
-  function mintSelectedDrop() {
+  async function mintSelectedDrop() {
     if (!selectedDrop) return;
     if (!walletAddress) {
       void connectWallet();
       return;
     }
+    if (!selectedDrop.tokenId) {
+      setNotice("This drop is not connected to an onchain token yet.");
+      return;
+    }
     if (mintPending || selectedDrop.minted >= selectedDrop.edition || activeLibrary.includes(selectedDrop.id)) return;
-    setMintPending(true);
 
-    setDrops((current) =>
-      current.map((drop) => {
-        if (drop.id !== selectedDrop.id) return drop;
-        const minted = Math.min(drop.minted + 1, drop.edition);
-        const collectors = drop.collectors.includes(walletAddress) ? drop.collectors : [...drop.collectors, walletAddress];
+    try {
+      setMintPending(true);
+      setNotice("Confirm the mint in your wallet. Free mint means price is 0; Base gas is still paid by you.");
+      const result = await droproom.mintDrop({ tokenId: selectedDrop.tokenId, quantity: 1 });
+      const mintedEvent = result.events.minted[0];
+      const paidWei = mintedEvent?.paid?.toString() ?? selectedDrop.priceWei ?? "0";
+
+      setDrops((current) =>
+        current.map((drop) => {
+          if (drop.id !== selectedDrop.id) return drop;
+          const minted = mintedEvent ? Number(mintedEvent.totalMinted) : Math.min(drop.minted + 1, drop.edition);
+          const collectors = drop.collectors.includes(walletAddress) ? drop.collectors : [...drop.collectors, walletAddress];
+          return {
+            ...drop,
+            minted,
+            status: minted >= drop.edition ? "sold-out" : drop.status,
+            collectors
+          };
+        })
+      );
+      setLibraryByWallet((current) => {
+        const key = walletAddress.toLowerCase();
+        const existing = current[key] ?? [];
         return {
-          ...drop,
-          minted,
-          status: minted >= drop.edition ? "sold-out" : drop.status,
-          collectors
+          ...current,
+          [key]: [selectedDrop.id, ...existing.filter((id) => id !== selectedDrop.id)]
         };
-      })
-    );
-    setLibraryByWallet((current) => {
-      const key = walletAddress.toLowerCase();
-      const existing = current[key] ?? [];
-      return {
-        ...current,
-        [key]: [selectedDrop.id, ...existing.filter((id) => id !== selectedDrop.id)]
-      };
+      });
+      setNotice(`Collected on Base. ${result.basescanUrl}`);
+      try {
+        await saveMint({
+          basescan_url: result.basescanUrl,
+          collector_address: walletAddress,
+          paid_wei: paidWei,
+          quantity: 1,
+          token_id: selectedDrop.tokenId,
+          tx_hash: result.hash
+        });
+      } catch (indexError) {
+        setNotice(
+          indexError instanceof Error
+            ? `Mint is onchain, index needs retry: ${indexError.message}`
+            : "Mint is onchain, but the index needs retry."
+        );
+      }
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Mint failed.");
+    } finally {
+      setMintPending(false);
+    }
+  }
+
+  async function saveDrop(drop: Drop) {
+    const response = await fetch("/api/drops", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(drop)
     });
-    setMintPending(false);
-    setNotice("Preview mint complete. Full onchain minting will be connected in the next production layer.");
+    const payload = (await response.json().catch(() => null)) as { drop?: Drop; error?: string } | null;
+
+    if (!response.ok) {
+      throw new Error(payload?.error ?? "Drop could not be indexed.");
+    }
+
+    return payload?.drop ?? drop;
+  }
+
+  async function saveMint(mint: {
+    basescan_url: string;
+    collector_address: string;
+    paid_wei: string;
+    quantity: number;
+    token_id: string;
+    tx_hash: string;
+  }) {
+    const response = await fetch("/api/mints", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(mint)
+    });
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+
+    if (!response.ok) {
+      throw new Error(payload?.error ?? "Mint could not be indexed.");
+    }
   }
 
   return (
@@ -421,25 +509,36 @@ export function DroproomApp() {
             </button>
           ))}
         </nav>
-        <button className="wallet-button" disabled={walletLoading} onClick={walletAddress ? () => setWalletAddress("") : connectWallet} type="button">
-          <span>{walletLoading ? "..." : "Base"}</span>
+        <button className="wallet-button" disabled={walletLoading} onClick={connectWallet} type="button">
+          <span>{walletLoading ? "..." : droproom.isCorrectChain ? "Base" : "Base Mainnet"}</span>
           {walletAddress ? shortAddress(walletAddress) : "Connect"}
         </button>
       </header>
 
-      {notice ? <div className="notice enter">{notice}</div> : null}
+      {notice ? (
+        <div className={`notice enter ${/indexed|collected|generated|uploaded/i.test(notice) ? "success" : ""}`}>
+          {notice}
+        </div>
+      ) : null}
 
       {view === "explore" ? (
         <section className="screen enter">
           <Hero onCreate={() => setView("create")} />
           <section className="content-grid">
             <div className="drop-grid">
-              {drops.map((drop) => (
-                <DropCard drop={drop} isSelected={drop.id === selectedDrop?.id} key={drop.id} onClick={() => setSelectedDropId(drop.id)} />
-              ))}
+              {dropsLoading ? (
+                <div className="empty-state">Loading live Base drops...</div>
+              ) : drops.length ? (
+                drops.map((drop) => (
+                  <DropCard drop={drop} isSelected={drop.id === selectedDrop?.id} key={drop.id} onClick={() => setSelectedDropId(drop.id)} />
+                ))
+              ) : (
+                <GenesisEmptyState onCreate={() => setView("create")} />
+              )}
             </div>
             {selectedDrop ? <DropDetail drop={selectedDrop} isMinting={mintPending} isOwned={activeLibrary.includes(selectedDrop.id)} onMint={mintSelectedDrop} /> : null}
           </section>
+          {soldOutDrops.length ? <SoldOutShowcase drops={soldOutDrops} onSelect={setSelectedDropId} /> : null}
         </section>
       ) : null}
 
@@ -460,7 +559,7 @@ export function DroproomApp() {
             onStyle={setStyleChip}
             onUpdateDraft={setDraft}
             onUpload={handleUpload}
-            hasCustomArtwork={hasCustomArtwork}
+            hasArtwork={hasArtwork}
             startMode={startMode}
             step={createStep}
             styleChip={styleChip}
@@ -495,34 +594,35 @@ function BackgroundGlow() {
 
 function Hero({ onCreate }: { onCreate: () => void }) {
   return (
-    <section className="hero">
+    <section className="hero hero-premium">
       <div className="hero-copy">
         <p className="eyebrow">Creator-first NFT drops on Base</p>
         <h1>Create limited drops. Get collected.</h1>
         <p>
-          Upload artwork, start from a blank canvas, or generate with AI. Publish image-only drops with free or paid minting,
+          Upload artwork, start from a blank canvas, or generate with AI. Publish limited image and looping GIF drops on Base,
           then track collectors, sold-out status, and future creator unlocks.
         </p>
         <div className="hero-actions">
           <button className="primary-button" onClick={onCreate} type="button">
-            Create NFT <span>-&gt;</span>
+            Create NFT <span>Now</span>
           </button>
-          <span className="microcopy">Free mints stay free. Paid mints include a {PLATFORM_FEE_PERCENT}% platform fee.</span>
+          <span className="microcopy">Free mints stay platform-fee free. Users pay their own Base gas.</span>
         </div>
       </div>
-      <div className="hero-art hero-art-compare">
-        <div className="hero-variant-grid" aria-label="Droproom app icon options">
-          <article className="hero-variant">
-            <Image alt="Droproom app icon option A" className="hero-variant-image" height={720} priority src={brandIconPrimary} width={720} />
-            <span>Icon A</span>
-          </article>
-          <article className="hero-variant">
-            <Image alt="Droproom app icon option B" className="hero-variant-image" height={720} priority src={brandIconSecondary} width={720} />
-            <span>Icon B</span>
-          </article>
+      <div className="hero-art hero-media-shell">
+        <div className="hero-product-card" aria-hidden="true">
+          <div className="product-media">
+            <Image alt="" className="hero-variant-image" height={720} priority src={brandIconPrimary} width={720} />
+          </div>
+          <div className="product-copy">
+            <span>Live drop format</span>
+            <strong>Image or looping GIF</strong>
+            <div className="product-progress"><i /></div>
+            <small>Real drops appear here after onchain publish.</small>
+          </div>
         </div>
-        <div className="floating-stat top">AI assisted</div>
-        <div className="floating-stat bottom">Sold-out unlocks</div>
+        <div className="floating-stat top">Base Mainnet</div>
+        <div className="floating-stat bottom">Live media drops</div>
       </div>
     </section>
   );
@@ -530,9 +630,10 @@ function Hero({ onCreate }: { onCreate: () => void }) {
 
 function DropCard({ drop, isSelected, onClick }: { drop: Drop; isSelected: boolean; onClick: () => void }) {
   const soldOut = drop.minted >= drop.edition;
+  const progress = Math.min((drop.minted / drop.edition) * 100, 100);
 
   return (
-    <button className={isSelected ? "drop-card selected" : "drop-card"} onClick={onClick} type="button">
+    <button className={[isSelected ? "drop-card selected" : "drop-card", soldOut ? "is-sold-out" : ""].filter(Boolean).join(" ")} onClick={onClick} type="button">
       <div className="drop-image-wrap">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img alt={drop.title} src={drop.image} />
@@ -546,6 +647,9 @@ function DropCard({ drop, isSelected, onClick }: { drop: Drop; isSelected: boole
           <span>
             {drop.minted}/{drop.edition}
           </span>
+        </div>
+        <div className="mini-progress" aria-label={`${Math.round(progress)} percent collected`}>
+          <span style={{ width: `${progress}%` }} />
         </div>
       </div>
     </button>
@@ -576,13 +680,58 @@ function DropDetail({ drop, isMinting, isOwned, onMint }: { drop: Drop; isMintin
           <span style={{ width: `${progress}%` }} />
         </div>
         <button className="primary-button wide" disabled={soldOut || isOwned || isMinting} onClick={onMint} type="button">
-          {soldOut ? "Sold out" : isOwned ? "Collected" : isMinting ? "Minting..." : "Mint preview"} <span>OK</span>
+          {soldOut ? "Sold out" : isOwned ? "Collected" : isMinting ? "Minting..." : "Mint on Base"} <span>Base</span>
         </button>
         <p className="microcopy">
-          V1 preview uses local state. Free drops have no platform fee; real onchain mints may still require network gas unless sponsorship is added.
+          Free mint means NFT price is 0. Base network gas is paid by your connected wallet.
+          {drop.basescanUrl ? (
+            <>
+              {" "}
+              <a href={drop.basescanUrl} rel="noreferrer" target="_blank">
+                View create tx
+              </a>
+            </>
+          ) : null}
         </p>
       </div>
     </aside>
+  );
+}
+
+function GenesisEmptyState({ onCreate }: { onCreate: () => void }) {
+  return (
+    <div className="empty-state genesis-empty">
+      <div className="genesis-orb">01</div>
+      <div>
+        <p className="eyebrow">No live drops yet</p>
+        <h3>Be the first creator on Droproom.</h3>
+        <p>This space stays empty until a real onchain drop is published. Only verified Base drops appear here.</p>
+      </div>
+      <button className="secondary-button" onClick={onCreate} type="button">
+        Create First Drop
+      </button>
+    </div>
+  );
+}
+
+function SoldOutShowcase({ drops, onSelect }: { drops: Drop[]; onSelect: (id: string) => void }) {
+  return (
+    <section className="sold-out-showcase">
+      <div>
+        <p className="eyebrow">Sold-out rooms</p>
+        <h2>Completed drops keep their spotlight.</h2>
+      </div>
+      <div className="sold-out-strip">
+        {drops.map((drop) => (
+          <button key={drop.id} onClick={() => onSelect(drop.id)} type="button">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img alt={drop.title} src={drop.image} />
+            <span>{drop.title}</span>
+            <small>{drop.edition}/{drop.edition} collected</small>
+          </button>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -601,7 +750,7 @@ function CreateFlow(props: {
   onStyle: (chip: StyleChipId) => void;
   onUpdateDraft: (draft: StudioDraft | ((current: StudioDraft) => StudioDraft)) => void;
   onUpload: (file?: File) => void;
-  hasCustomArtwork: boolean;
+  hasArtwork: boolean;
   startMode: StartMode;
   step: CreateStep;
   styleChip: StyleChipId;
@@ -612,12 +761,12 @@ function CreateFlow(props: {
         <div>
           <p className="eyebrow">Create NFT</p>
           <h1>Start from the strongest path for your drop.</h1>
-          <p>Keep it simple: image-only, limited editions, free or paid minting, and a clean review before publish.</p>
+          <p>Keep it simple: image or short looping GIF, limited editions, free or paid minting, and a clean onchain review before publish.</p>
         </div>
         <div className="start-grid">
-          <StartCard icon="UP" label="Upload artwork" onClick={() => props.onBegin("upload")} text="Bring your finished PNG, JPG, or WEBP and turn it into a drop." />
-          <StartCard icon="BL" label="Start from blank" onClick={() => props.onBegin("blank")} text="Build a simple card with background, frame, title, and preview." />
-          <StartCard icon="AI" label="Generate with AI" onClick={() => props.onBegin("ai")} text="Prompt + style chips, 4 image variations, 10 AI jobs per day." />
+          <StartCard icon={<i aria-hidden="true" className="mode-glyph upload-glyph" />} label="Upload artwork" onClick={() => props.onBegin("upload")} text="Bring a PNG, JPG, WEBP, or one-second GIF and turn it into a Base drop." />
+          <StartCard icon={<i aria-hidden="true" className="mode-glyph canvas-glyph" />} label="Start from blank" onClick={() => props.onBegin("blank")} text="Build a simple card with background, frame, title, and preview." />
+          <StartCard icon={<i aria-hidden="true" className="mode-glyph ai-glyph" />} label="Generate with AI" onClick={() => props.onBegin("ai")} text="Prompt + style chips, 4 image variations, 10 AI jobs per day." />
         </div>
       </section>
     );
@@ -655,7 +804,7 @@ function CreateFlow(props: {
           <label className="upload-zone">
             <span className="upload-icon">+</span>
             <span>Choose an image for the room</span>
-            <small>PNG, JPG, WEBP only</small>
+            <small>PNG, JPG, WEBP, GIF. Max 10 MB.</small>
             <input accept={ACCEPTED_IMAGE_TYPES.join(",")} onChange={(event) => props.onUpload(event.target.files?.[0])} type="file" />
           </label>
         ) : null}
@@ -671,7 +820,7 @@ function CreateFlow(props: {
               ))}
             </div>
             <button className="secondary-button" disabled={props.aiLoading} onClick={props.onGenerate} type="button">
-              {props.aiLoading ? "Generating..." : "* Generate 4 variations"}
+              {props.aiLoading ? "Generating..." : "Generate 4 variations"}
             </button>
             {props.aiImages.length ? (
               <div className="variation-grid">
@@ -749,10 +898,10 @@ function CreateFlow(props: {
         <button className={props.draft.isFree ? "toggle active" : "toggle"} onClick={() => props.onUpdateDraft((current) => ({ ...current, isFree: !current.isFree, price: current.isFree ? 0.01 : 0 }))} type="button">
           {props.draft.isFree ? "Free mint" : `Paid mint (${PLATFORM_FEE_PERCENT}% fee)`}
         </button>
-        <button className="primary-button wide" disabled={!props.hasCustomArtwork} onClick={() => props.onStep("review")} type="button">
+        <button className="primary-button wide" disabled={!props.hasArtwork} onClick={() => props.onStep("review")} type="button">
           Review drop <span>→</span>
         </button>
-        {!props.hasCustomArtwork ? <p className="microcopy">Add artwork, choose a blank canvas, or select an AI variation before review.</p> : null}
+        {!props.hasArtwork ? <p className="microcopy">Add artwork, choose a blank canvas, or select an AI variation before review.</p> : null}
       </div>
 
       <div className="preview-stage">
@@ -768,7 +917,7 @@ function StartCard({ icon, label, onClick, text }: { icon: ReactNode; label: str
       <span>{icon}</span>
       <h3>{label}</h3>
       <p>{text}</p>
-      <strong>-&gt;</strong>
+      <strong>Open</strong>
     </button>
   );
 }
@@ -777,8 +926,14 @@ function LivePreview({ draft }: { draft: StudioDraft }) {
   return (
     <div className="live-preview-card">
       <div className={`preview-art ${draft.frame}`}>
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img alt={draft.title} src={draft.image || createBlankArtwork(draft.title)} />
+        {draft.image ? (
+          <>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img alt={draft.title} src={draft.image} />
+          </>
+        ) : (
+          <div className="preview-empty">Awaiting artwork</div>
+        )}
         {draft.overlayText ? <span>{draft.overlayText}</span> : null}
       </div>
       <div className="preview-copy">
@@ -786,9 +941,9 @@ function LivePreview({ draft }: { draft: StudioDraft }) {
         <h2>{draft.title}</h2>
         <p>{draft.description}</p>
         <div className="stat-row">
-          <span>{draft.isFree ? "Free" : `${draft.price} ETH`}</span>
-          <span>{draft.edition} editions</span>
-          <span>{draft.edition >= TOKEN_UNLOCK_MIN_EDITION ? "Unlock eligible" : "Below unlock minimum"}</span>
+            <span>{draft.isFree ? "Free" : `${draft.price} ETH`}</span>
+            <span>{draft.edition} editions</span>
+            <span>{draft.edition >= TOKEN_UNLOCK_MIN_EDITION ? "Unlock eligible" : "Below unlock minimum"}</span>
         </div>
       </div>
     </div>
@@ -825,9 +980,10 @@ function ReviewStep({ draft, onBack, onPublish }: { draft: StudioDraft; onBack: 
             Back to studio
           </button>
           <button className="primary-button" onClick={onPublish} type="button">
-            Publish preview <span>-&gt;</span>
+            Publish on Base <span>Live</span>
           </button>
         </div>
+        <p className="microcopy">Publishing uploads the asset to IPFS, creates metadata, then asks your wallet to create the drop on Base. You pay network gas.</p>
       </div>
     </section>
   );
@@ -854,12 +1010,12 @@ function Dashboard({
         <p>{eligibilityReason}</p>
       </div>
       <div className="metric-card">
-        <span>*</span>
+        <span>Sold</span>
         <span>Sold-out qualifying drops</span>
         <strong>{soldOutCount}</strong>
       </div>
       <div className="metric-card">
-        <span>&lt;&gt;</span>
+        <span>Next</span>
         <span>Future unlock status</span>
         <strong>{canUnlockToken ? "Review ready" : "Locked"}</strong>
       </div>
@@ -879,7 +1035,7 @@ function Dashboard({
             </div>
           ))
         ) : (
-          <div className="empty-state">Create your first drop to see dashboard metrics.</div>
+          <div className="empty-state">Create your first onchain drop to see dashboard metrics.</div>
         )}
       </div>
     </section>
@@ -899,8 +1055,8 @@ function LibraryView({ drops }: { drops: Drop[] }) {
         </div>
       ) : (
         <div className="empty-state">
-          <span>&lt;&gt;</span>
-          Mint a preview edition from Explore to populate your collection.
+          <span>Base</span>
+          Mint a live Base edition from Explore to populate your collection.
         </div>
       )}
     </section>

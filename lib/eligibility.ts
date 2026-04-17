@@ -7,7 +7,10 @@ export type EligibilityResult = {
 };
 
 export function getCreatorTokenEligibility(drops: Drop[], creatorAddress?: string): EligibilityResult {
-  const creatorDrops = drops.filter((drop) => drop.creatorAddress === creatorAddress || drop.creator === "You");
+  const normalizedCreator = creatorAddress?.toLowerCase();
+  const creatorDrops = normalizedCreator
+    ? drops.filter((drop) => drop.creatorAddress?.toLowerCase() === normalizedCreator)
+    : [];
   const qualifyingDrop = creatorDrops.find((drop) => drop.status === "sold-out" && drop.edition >= TOKEN_UNLOCK_MIN_EDITION);
 
   if (!qualifyingDrop) {
