@@ -328,6 +328,51 @@ small {
   line-height: 1.55;
 }
 
+.base-save-card {
+  display: grid;
+  gap: 8px;
+  max-width: 650px;
+  margin-top: 24px;
+  padding: 16px;
+  border: 1px solid rgba(49, 243, 233, 0.22);
+  border-radius: 22px;
+  background:
+    linear-gradient(135deg, rgba(49, 243, 233, 0.11), transparent 46%),
+    rgba(3, 10, 18, 0.54);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.base-save-card > span {
+  color: var(--cyan);
+  font-size: 0.72rem;
+  font-weight: 900;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.base-save-card strong {
+  font-family: var(--font-display), sans-serif;
+  font-size: 1.05rem;
+}
+
+.base-save-card p {
+  margin-bottom: 0;
+}
+
+.base-save-card div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.base-save-card small {
+  padding: 7px 9px;
+  border: 1px solid rgba(164, 223, 255, 0.18);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.045);
+  color: #bdefff;
+}
+
 .hero-art {
   position: relative;
   min-height: 460px;
@@ -554,6 +599,7 @@ small {
 .metric-card,
 .dash-hero,
 .dashboard-list,
+.admin-notification-panel,
 .live-preview-card,
 .library-view {
   border: 1px solid var(--line);
@@ -659,6 +705,7 @@ small {
 .review-panel,
 .dash-hero,
 .dashboard-list,
+.admin-notification-panel,
 .library-view {
   padding: 28px;
 }
@@ -853,6 +900,50 @@ textarea:focus {
 
 .dashboard-list {
   grid-column: 1 / -1;
+}
+
+.admin-notification-panel {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 18px;
+  background:
+    radial-gradient(circle at 12% 0%, rgba(49, 243, 233, 0.13), transparent 24rem),
+    rgba(6, 15, 26, 0.82);
+}
+
+.admin-panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.admin-panel-head h2 {
+  margin-bottom: 8px;
+}
+
+.admin-panel-head p {
+  max-width: 760px;
+  margin-bottom: 0;
+}
+
+.admin-panel-head > strong {
+  flex: 0 0 auto;
+  padding: 10px 12px;
+  border: 1px solid rgba(49, 243, 233, 0.28);
+  border-radius: 999px;
+  background: rgba(49, 243, 233, 0.09);
+  color: var(--text);
+}
+
+.admin-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.admin-status {
+  margin: 0;
 }
 
 .metric-card {
@@ -1092,6 +1183,7 @@ textarea:focus {
   .review-panel,
   .dash-hero,
   .dashboard-list,
+  .admin-notification-panel,
   .library-view {
     padding: 22px;
     border-radius: 26px;
@@ -1162,6 +1254,7 @@ body {
 .review-panel::before,
 .metric-card::before,
 .dash-hero::before,
+.admin-notification-panel::before,
 .dashboard-list::before,
 .library-view::before,
 .live-preview-card::before,
@@ -1294,6 +1387,7 @@ body {
 .enter .review-list li,
 .enter .dash-hero,
 .enter .metric-card,
+.enter .admin-notification-panel,
 .enter .dashboard-list,
 .enter .dashboard-row,
 .enter .library-view,
@@ -1511,6 +1605,7 @@ body {
 .metric-card,
 .dash-hero,
 .dashboard-list,
+.admin-notification-panel,
 .library-view,
 .live-preview-card,
 .drop-detail {
@@ -1531,6 +1626,7 @@ body {
 .review-panel::before,
 .metric-card::before,
 .dash-hero::before,
+.admin-notification-panel::before,
 .dashboard-list::before,
 .library-view::before,
 .live-preview-card::before,

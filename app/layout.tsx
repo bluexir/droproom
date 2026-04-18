@@ -5,6 +5,7 @@ import "./globals.css";
 
 const appName = process.env.NEXT_PUBLIC_APP_NAME ?? "Droproom";
 const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+const baseAppId = process.env.NEXT_PUBLIC_BASE_APP_ID ?? "69db83cb2c63bda0567316af";
 const appDescription =
   "Create limited social NFT drops with upload, blank canvas, and AI-assisted creation on Base. No sponsored gas: users pay their own network gas.";
 const ogImage = "/brand/droproom-premium-hero.png";
@@ -46,6 +47,9 @@ export const metadata: Metadata = {
     title: "Droproom | Limited NFT Drops on Base",
     description: appDescription,
     images: [ogImage]
+  },
+  other: {
+    "base:app_id": baseAppId
   }
 };
 

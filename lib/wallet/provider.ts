@@ -95,6 +95,20 @@ export async function requestWalletAccount(provider = requireInjectedWalletProvi
   return getAddress(accounts[0]);
 }
 
+export async function signWalletMessage(message: string, account?: Address, provider = requireInjectedWalletProvider()) {
+  const signer = account ?? (await requestWalletAccount(provider));
+  const signature = await provider.request({
+    method: "personal_sign",
+    params: [message, signer]
+  });
+
+  if (typeof signature !== "string") {
+    throw new WalletProviderError("Wallet did not return a signature.");
+  }
+
+  return asHex(signature);
+}
+
 export function assertBaseMainnetChain(chainId: number | null | undefined) {
   if (chainId !== DROPROOM_CHAIN_ID) {
     throw new WalletProviderError(`Wrong network. Switch to Base mainnet (${DROPROOM_CHAIN_ID}).`);

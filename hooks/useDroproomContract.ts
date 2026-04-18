@@ -25,6 +25,7 @@ import {
   getWalletChainId,
   parseWalletChainId,
   requestWalletAccount,
+  signWalletMessage,
   type Eip1193Provider
 } from "@/lib/wallet/provider";
 
@@ -150,6 +151,19 @@ export function useDroproomContract() {
     return sendAndWait(() => mintDrop({ ...input, ...ready }));
   }
 
+  async function signMessage(message: string) {
+    const provider = requireProvider();
+    const signer = account ?? (await requestWalletAccount(provider));
+    const signature = await signWalletMessage(message, signer, provider);
+
+    startTransition(() => {
+      setAccount(signer);
+      setHasProvider(true);
+    });
+
+    return { address: signer, message, signature };
+  }
+
   async function sendAndWait(send: () => Promise<Hash>) {
     setError(null);
     setTx({ ...initialTxState, pending: true });
@@ -206,6 +220,7 @@ export function useDroproomContract() {
     readDropBalance: (owner: Address, tokenId: bigint | number | string) => readDropBalance(owner, tokenId),
     refreshWalletState,
     resetTx,
+    signMessage,
     tx
   };
 }

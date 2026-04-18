@@ -9,6 +9,7 @@ import {
   AI_DAILY_JOB_LIMIT,
   EDITION_MAX,
   MAX_UPLOAD_BYTES,
+  PLATFORM_WALLET,
   PLATFORM_FEE_PERCENT,
   STYLE_CHIPS,
   TOKEN_UNLOCK_MIN_EDITION,
@@ -21,6 +22,22 @@ import type { Drop, StartMode, StudioDraft } from "@/lib/types";
 
 type View = "explore" | "create" | "dashboard" | "library";
 type CreateStep = "start" | "studio" | "review";
+type BaseNotificationAdminInput = {
+  action: "audience" | "send";
+  message?: string;
+  targetPath?: string;
+  title?: string;
+};
+type BaseNotificationAdminResult = {
+  appUrl?: string;
+  error?: string;
+  failedCount?: number;
+  notificationEnabledCount?: number;
+  sentCount?: number;
+  targetedCount?: number;
+  users?: string[];
+};
+type BaseNotificationAdminRequester = (input: BaseNotificationAdminInput) => Promise<BaseNotificationAdminResult>;
 
 const libraryKey = "droproom:library:v1";
 const brandIconPrimary = "/brand/droproom-premium-hero.png";
@@ -158,6 +175,7 @@ export function DroproomApp() {
   const soldOutDrops = drops.filter((drop) => drop.status === "sold-out" || drop.minted >= drop.edition).slice(0, 4);
   const soldOutCount = creatorDrops.filter((drop) => drop.status === "sold-out" && drop.edition >= TOKEN_UNLOCK_MIN_EDITION).length;
   const tokenEligibility = getCreatorTokenEligibility(drops, walletAddress);
+  const isPlatformAdmin = walletAddress.toLowerCase() === PLATFORM_WALLET.toLowerCase();
 
   async function loadDrops() {
     try {
@@ -165,14 +183,51 @@ export function DroproomApp() {
       const response = await fetch("/api/drops", { cache: "no-store" });
       const payload = (await response.json()) as { drops?: Drop[]; error?: string };
       const nextDrops = payload.drops ?? [];
+      const requestedDropId = new URLSearchParams(window.location.search).get("drop");
+      const requestedDrop = requestedDropId ? nextDrops.find((drop) => drop.id === requestedDropId || drop.tokenId === requestedDropId) : null;
       setDrops(nextDrops);
-      setSelectedDropId((current) => current ?? nextDrops[0]?.id ?? null);
+      setSelectedDropId((current) => requestedDrop?.id ?? current ?? nextDrops[0]?.id ?? null);
       if (!response.ok && payload.error) setNotice(payload.error);
     } catch {
       setNotice("Live drops could not be loaded yet.");
     } finally {
       setDropsLoading(false);
     }
+  }
+
+  function selectDrop(id: string) {
+    setSelectedDropId(id);
+
+    const url = new URL(window.location.href);
+    url.searchParams.set("drop", id);
+    window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+  }
+
+  async function requestBaseNotificationAdmin(input: BaseNotificationAdminInput) {
+    if (!walletAddress) {
+      throw new Error("Connect the Droproom admin Base Wallet first.");
+    }
+
+    const signedMessage = [
+      "Droproom admin action",
+      `Action: ${input.action}`,
+      `Domain: ${window.location.host}`,
+      `Issued At: ${new Date().toISOString()}`
+    ].join("\n");
+
+    const auth = await droproom.signMessage(signedMessage);
+    const response = await fetch("/api/admin/base-notifications", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...input, auth })
+    });
+    const payload = (await response.json().catch(() => null)) as BaseNotificationAdminResult | null;
+
+    if (!response.ok) {
+      throw new Error(payload?.error ?? "Base notification request failed.");
+    }
+
+    return payload ?? {};
   }
 
   async function loadMintLibrary(address: string) {
@@ -528,9 +583,9 @@ export function DroproomApp() {
             <div className="drop-grid">
               {dropsLoading ? (
                 <div className="empty-state">Loading live Base drops...</div>
-              ) : drops.length ? (
+            ) : drops.length ? (
                 drops.map((drop) => (
-                  <DropCard drop={drop} isSelected={drop.id === selectedDrop?.id} key={drop.id} onClick={() => setSelectedDropId(drop.id)} />
+                  <DropCard drop={drop} isSelected={drop.id === selectedDrop?.id} key={drop.id} onClick={() => selectDrop(drop.id)} />
                 ))
               ) : (
                 <GenesisEmptyState onCreate={() => setView("create")} />
@@ -538,7 +593,7 @@ export function DroproomApp() {
             </div>
             {selectedDrop ? <DropDetail drop={selectedDrop} isMinting={mintPending} isOwned={activeLibrary.includes(selectedDrop.id)} onMint={mintSelectedDrop} /> : null}
           </section>
-          {soldOutDrops.length ? <SoldOutShowcase drops={soldOutDrops} onSelect={setSelectedDropId} /> : null}
+          {soldOutDrops.length ? <SoldOutShowcase drops={soldOutDrops} onSelect={selectDrop} /> : null}
         </section>
       ) : null}
 
@@ -569,7 +624,14 @@ export function DroproomApp() {
 
       {view === "dashboard" ? (
         <section className="screen dashboard enter">
-          <Dashboard drops={creatorDrops} eligibilityReason={tokenEligibility.reason} eligibilityStatus={tokenEligibility.status} soldOutCount={soldOutCount} />
+          <Dashboard
+            drops={creatorDrops}
+            eligibilityReason={tokenEligibility.reason}
+            eligibilityStatus={tokenEligibility.status}
+            isAdmin={isPlatformAdmin}
+            onBaseNotificationAdmin={requestBaseNotificationAdmin}
+            soldOutCount={soldOutCount}
+          />
         </section>
       ) : null}
 
@@ -608,6 +670,7 @@ function Hero({ onCreate }: { onCreate: () => void }) {
           </button>
           <span className="microcopy">Free mints stay platform-fee free. Users pay their own Base gas.</span>
         </div>
+        <BaseAppSaveCard />
       </div>
       <div className="hero-art hero-media-shell">
         <div className="hero-product-card" aria-hidden="true">
@@ -625,6 +688,21 @@ function Hero({ onCreate }: { onCreate: () => void }) {
         <div className="floating-stat bottom">Live media drops</div>
       </div>
     </section>
+  );
+}
+
+function BaseAppSaveCard() {
+  return (
+    <div className="base-save-card">
+      <span>Base App notifications</span>
+      <strong>Save Droproom in Base App.</strong>
+      <p>Open Droproom inside Base App, save the app, then enable notifications to hear when new drops go live.</p>
+      <div>
+        <small>Open in Base App</small>
+        <small>Save app</small>
+        <small>Enable notifications</small>
+      </div>
+    </div>
   );
 }
 
@@ -993,11 +1071,15 @@ function Dashboard({
   drops,
   eligibilityReason,
   eligibilityStatus,
+  isAdmin,
+  onBaseNotificationAdmin,
   soldOutCount
 }: {
   drops: Drop[];
   eligibilityReason: string;
   eligibilityStatus: "locked" | "review-ready";
+  isAdmin: boolean;
+  onBaseNotificationAdmin: BaseNotificationAdminRequester;
   soldOutCount: number;
 }) {
   const canUnlockToken = eligibilityStatus === "review-ready";
@@ -1038,6 +1120,89 @@ function Dashboard({
           <div className="empty-state">Create your first onchain drop to see dashboard metrics.</div>
         )}
       </div>
+      {isAdmin ? <BaseNotificationAdminPanel onRequest={onBaseNotificationAdmin} /> : null}
+    </section>
+  );
+}
+
+function BaseNotificationAdminPanel({ onRequest }: { onRequest: BaseNotificationAdminRequester }) {
+  const [title, setTitle] = useState("New drop live");
+  const [message, setMessage] = useState("A new limited Droproom NFT drop is now available on Base.");
+  const [targetPath, setTargetPath] = useState("/");
+  const [audienceCount, setAudienceCount] = useState<number | null>(null);
+  const [status, setStatus] = useState("");
+  const [loading, setLoading] = useState<"audience" | "send" | null>(null);
+  const titleInvalid = title.trim().length === 0 || title.trim().length > 30;
+  const messageInvalid = message.trim().length === 0 || message.trim().length > 200;
+
+  async function run(action: "audience" | "send") {
+    try {
+      setLoading(action);
+      setStatus(action === "audience" ? "Checking Base App notification audience..." : "Sign with the admin wallet to send.");
+      const result = await onRequest({
+        action,
+        message,
+        targetPath,
+        title
+      });
+
+      if (typeof result.notificationEnabledCount === "number") {
+        setAudienceCount(result.notificationEnabledCount);
+      }
+
+      if (action === "audience") {
+        setStatus(`${result.notificationEnabledCount ?? 0} saved users currently have notifications enabled.`);
+      } else {
+        setStatus(`Sent ${result.sentCount ?? 0}/${result.targetedCount ?? 0}. Failed: ${result.failedCount ?? 0}.`);
+      }
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Base notification action failed.");
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  return (
+    <section className="admin-notification-panel">
+      <div className="admin-panel-head">
+        <div>
+          <p className="eyebrow">Admin notifications</p>
+          <h2>Send Base App alerts.</h2>
+          <p>Only saved Base App users who enabled notifications can receive these messages.</p>
+        </div>
+        <strong>{audienceCount === null ? "Not checked" : `${audienceCount} enabled`}</strong>
+      </div>
+      <div className="field-row">
+        <label className="field">
+          <span>Title</span>
+          <input maxLength={30} onChange={(event) => setTitle(event.target.value)} value={title} />
+          <small>{title.trim().length}/30</small>
+        </label>
+        <label className="field">
+          <span>Target path</span>
+          <input onChange={(event) => setTargetPath(event.target.value)} placeholder="/?drop=1" value={targetPath} />
+          <small>Use / for home or /?drop=TOKEN_ID for a specific drop.</small>
+        </label>
+      </div>
+      <label className="field">
+        <span>Message</span>
+        <textarea maxLength={200} onChange={(event) => setMessage(event.target.value)} value={message} />
+        <small>{message.trim().length}/200</small>
+      </label>
+      <div className="admin-actions">
+        <button className="secondary-button" disabled={loading !== null} onClick={() => void run("audience")} type="button">
+          {loading === "audience" ? "Checking..." : "Check audience"}
+        </button>
+        <button
+          className="primary-button"
+          disabled={loading !== null || titleInvalid || messageInvalid}
+          onClick={() => void run("send")}
+          type="button"
+        >
+          {loading === "send" ? "Sending..." : "Send notification"}
+        </button>
+      </div>
+      {status ? <p className="microcopy admin-status">{status}</p> : null}
     </section>
   );
 }
