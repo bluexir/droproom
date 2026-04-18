@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { readDrop } from "@/lib/contract";
 import { getBasescanTxUrl } from "@/lib/contract/links";
 import { ipfsUriToGatewayUrl } from "@/lib/ipfs";
 import { verifyDropCreatedTx } from "@/lib/server/chain-events";
@@ -66,11 +67,27 @@ export async function GET() {
     const rows = await supabaseRest<DropRow[]>(
       "drops?select=*&order=created_at.desc&limit=60"
     );
+    const syncedRows = await Promise.all(rows.map(syncRowWithChain));
 
-    return NextResponse.json({ drops: rows.map(toDrop) });
+    return NextResponse.json({ drops: syncedRows.map(toDrop) });
   } catch (error) {
     console.error("Drop fetch failed", error);
     return NextResponse.json({ drops: [], error: "Drops are not available yet." }, { status: 503 });
+  }
+}
+
+async function syncRowWithChain(row: DropRow): Promise<DropRow> {
+  try {
+    const onchain = await readDrop(row.token_id);
+    const minted = Number(onchain.minted);
+
+    return {
+      ...row,
+      minted,
+      status: onchain.soldOut || minted >= row.edition ? "sold-out" : "live"
+    };
+  } catch {
+    return row;
   }
 }
 

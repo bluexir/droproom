@@ -1,6 +1,6 @@
 import type { MetadataRoute } from "next";
 
-const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "https://baseappdroproom.com";
 const lastModified = new Date("2026-04-16T00:00:00.000Z");
 
 const routes = [

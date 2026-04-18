@@ -11,7 +11,7 @@ import {
 export const runtime = "nodejs";
 
 type BaseNotificationRequest = {
-  action?: "audience" | "send";
+  action?: "audience" | "send" | "test";
   auth?: AdminAuthPayload;
   message?: unknown;
   targetPath?: unknown;
@@ -22,12 +22,12 @@ export async function POST(request: Request) {
   const body = (await request.json().catch(() => null)) as BaseNotificationRequest | null;
   const action = body?.action;
 
-  if (action !== "audience" && action !== "send") {
+  if (action !== "audience" && action !== "send" && action !== "test") {
     return NextResponse.json({ error: "Unsupported notification admin action." }, { status: 400 });
   }
 
   try {
-    await verifyDroproomAdminRequest(request, body?.auth, action);
+    const adminWallet = await verifyDroproomAdminRequest(request, body?.auth, action);
 
     const appUrl = resolveBaseAppUrl(request);
     const audience = await fetchBaseNotificationAudience(appUrl);
@@ -40,12 +40,13 @@ export async function POST(request: Request) {
       });
     }
 
+    const walletAddresses = action === "test" ? [adminWallet] : audience.map((user) => user.address);
     const result = await sendBaseNotification({
       appUrl,
       message: typeof body?.message === "string" ? body.message : "",
       targetPath: typeof body?.targetPath === "string" ? body.targetPath : "/",
       title: typeof body?.title === "string" ? body.title : "",
-      walletAddresses: audience.map((user) => user.address)
+      walletAddresses
     });
 
     return NextResponse.json({

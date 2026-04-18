@@ -7,8 +7,11 @@ import {
   type Hex,
   type WalletClient
 } from "viem";
+import { Attribution } from "ox/erc8021";
 
 import { BASE_EXPLORER_URL, BASE_PUBLIC_RPC_URL, DROPROOM_CHAIN, DROPROOM_CHAIN_ID } from "@/lib/wallet/base";
+
+const BASE_BUILDER_CODE = process.env.NEXT_PUBLIC_BASE_BUILDER_CODE?.trim() || "bc_n0xmhqgc";
 
 export type Eip1193Provider = {
   request: (args: { method: string; params?: readonly unknown[] | Record<string, unknown> }) => Promise<unknown>;
@@ -95,6 +98,28 @@ export async function requestWalletAccount(provider = requireInjectedWalletProvi
   return getAddress(accounts[0]);
 }
 
+export async function requestWalletAccountSwitch(provider = requireInjectedWalletProvider()) {
+  await provider
+    .request({
+      method: "wallet_requestPermissions",
+      params: [{ eth_accounts: {} }]
+    })
+    .catch(() => null);
+
+  return requestWalletAccount(provider);
+}
+
+export async function disconnectWallet(provider = getInjectedWalletProvider()) {
+  if (!provider) return;
+
+  await provider
+    .request({
+      method: "wallet_revokePermissions",
+      params: [{ eth_accounts: {} }]
+    })
+    .catch(() => null);
+}
+
 export async function signWalletMessage(message: string, account?: Address, provider = requireInjectedWalletProvider()) {
   const signer = account ?? (await requestWalletAccount(provider));
   const signature = await provider.request({
@@ -162,6 +187,7 @@ export function createDroproomWalletClient(provider = requireInjectedWalletProvi
   return createWalletClient({
     account,
     chain: DROPROOM_CHAIN,
+    dataSuffix: BASE_BUILDER_CODE ? Attribution.toDataSuffix({ codes: [BASE_BUILDER_CODE] }) : undefined,
     transport: custom(provider)
   });
 }

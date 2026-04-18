@@ -19,11 +19,13 @@ import { getBasescanTxUrl } from "@/lib/contract/links";
 import { DROPROOM_CHAIN_ID, isBaseMainnetChainId } from "@/lib/wallet/base";
 import {
   createDroproomWalletClient,
+  disconnectWallet,
   ensureWalletOnBaseMainnet,
   getConnectedWalletAccounts,
   getInjectedWalletProvider,
   getWalletChainId,
   parseWalletChainId,
+  requestWalletAccountSwitch,
   requestWalletAccount,
   signWalletMessage,
   type Eip1193Provider
@@ -101,6 +103,39 @@ export function useDroproomContract() {
 
     try {
       const nextAccount = await requestWalletAccount(provider);
+      const nextChainId = await ensureWalletOnBaseMainnet(provider);
+
+      startTransition(() => {
+        setAccount(nextAccount);
+        setChainId(nextChainId);
+        setHasProvider(true);
+      });
+
+      return nextAccount;
+    } catch (nextError) {
+      const message = formatError(nextError);
+      setError(message);
+      throw nextError;
+    }
+  }
+
+  async function disconnect() {
+    const provider = getInjectedWalletProvider();
+    await disconnectWallet(provider ?? undefined);
+
+    startTransition(() => {
+      setAccount(null);
+      setChainId(null);
+      setTx(initialTxState);
+    });
+  }
+
+  async function switchAccount() {
+    const provider = requireProvider();
+    setError(null);
+
+    try {
+      const nextAccount = await requestWalletAccountSwitch(provider);
       const nextChainId = await ensureWalletOnBaseMainnet(provider);
 
       startTransition(() => {
@@ -209,6 +244,7 @@ export function useDroproomContract() {
     chainId,
     connect,
     createDrop: createDropTx,
+    disconnect,
     ensureBaseChain,
     error,
     expectedChainId: DROPROOM_CHAIN_ID,
@@ -221,6 +257,7 @@ export function useDroproomContract() {
     refreshWalletState,
     resetTx,
     signMessage,
+    switchAccount,
     tx
   };
 }

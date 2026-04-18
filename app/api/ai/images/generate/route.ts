@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { AiImageGenerationError, generateAiImages } from "@/lib/ai-images";
 import { AI_DAILY_JOB_LIMIT, STYLE_CHIPS, type StyleChipId } from "@/lib/constants";
+import { supabaseRest } from "@/lib/server/supabase-rest";
 
 export const runtime = "nodejs";
 
@@ -12,12 +13,58 @@ type ImageRequest = {
 
 const usage = new Map<string, { count: number; resetAt: number }>();
 
+type AiUsageRow = {
+  client_key: string;
+  count: number;
+  usage_day: string;
+};
+
 function getClientKey(request: Request) {
   const forwardedFor = request.headers.get("x-forwarded-for") ?? "local";
   return forwardedFor.split(",")[0]?.trim() || "local";
 }
 
-function checkLimit(key: string) {
+function getUsageDay() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+async function checkLimit(key: string) {
+  const usageDay = getUsageDay();
+
+  try {
+    const rows = await supabaseRest<AiUsageRow[]>(
+      `ai_usage?select=*&client_key=eq.${encodeURIComponent(key)}&usage_day=eq.${usageDay}&limit=1`
+    );
+    const row = rows[0];
+
+    if (row && row.count >= AI_DAILY_JOB_LIMIT) return false;
+
+    if (row) {
+      await supabaseRest<AiUsageRow[]>(
+        `ai_usage?client_key=eq.${encodeURIComponent(key)}&usage_day=eq.${usageDay}`,
+        {
+          method: "PATCH",
+          body: { count: row.count + 1 },
+          headers: { "Content-Type": "application/json" },
+          prefer: "return=minimal"
+        }
+      );
+    } else {
+      await supabaseRest<AiUsageRow[]>("ai_usage", {
+        method: "POST",
+        body: { client_key: key, count: 1, usage_day: usageDay },
+        headers: { "Content-Type": "application/json" },
+        prefer: "return=minimal"
+      });
+    }
+
+    return true;
+  } catch {
+    return checkMemoryLimit(key);
+  }
+}
+
+function checkMemoryLimit(key: string) {
   const now = Date.now();
   const current = usage.get(key);
 
@@ -76,7 +123,7 @@ export async function POST(request: Request) {
 
   const clientKey = getClientKey(request);
 
-  if (!checkLimit(clientKey)) {
+  if (!(await checkLimit(clientKey))) {
     return NextResponse.json({ error: "Daily AI limit reached." }, { status: 429 });
   }
 

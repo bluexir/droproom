@@ -753,7 +753,8 @@ small {
 }
 
 textarea,
-input {
+input,
+select {
   width: 100%;
   border: 1px solid var(--line);
   border-radius: 18px;
@@ -762,7 +763,8 @@ input {
   outline: none;
 }
 
-input {
+input,
+select {
   min-height: 48px;
   padding: 0 14px;
 }
@@ -774,6 +776,7 @@ textarea {
 }
 
 input:focus,
+select:focus,
 textarea:focus {
   border-color: var(--line-strong);
 }
@@ -2312,6 +2315,200 @@ input:focus {
   .start-card > span {
     width: 42px;
     height: 42px;
+  }
+}
+
+.topbar {
+  overflow: visible;
+}
+
+.wallet-menu {
+  position: relative;
+  justify-self: end;
+  min-width: 0;
+}
+
+.wallet-button {
+  max-width: min(280px, 42vw);
+  white-space: nowrap;
+}
+
+.wallet-button strong {
+  overflow: hidden;
+  max-width: 150px;
+  text-overflow: ellipsis;
+}
+
+.wallet-button.connected {
+  border-color: rgba(49, 243, 233, 0.34);
+  background:
+    linear-gradient(135deg, rgba(49, 243, 233, 0.12), transparent 48%),
+    rgba(255, 255, 255, 0.06);
+}
+
+.wallet-dropdown {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  z-index: 40;
+  display: grid;
+  width: min(280px, calc(100vw - 32px));
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid rgba(164, 223, 255, 0.22);
+  border-radius: 22px;
+  background: rgba(5, 13, 24, 0.96);
+  box-shadow:
+    0 24px 90px rgba(0, 0, 0, 0.46),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(18px);
+  animation: notice-enter 260ms var(--ease-out) both;
+}
+
+.wallet-dropdown span {
+  color: var(--cyan);
+  font-size: 0.7rem;
+  font-weight: 900;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.wallet-dropdown strong {
+  margin-bottom: 4px;
+}
+
+.wallet-dropdown button,
+.wallet-dropdown a {
+  display: flex;
+  justify-content: space-between;
+  min-height: 40px;
+  padding: 10px 12px;
+  border: 1px solid rgba(164, 223, 255, 0.14);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--text);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.wallet-dropdown .danger-link {
+  color: #ffb8c5;
+}
+
+.base-ready-strip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  width: min(1220px, 100%);
+  margin: -12px auto 20px;
+  padding: 10px 16px;
+  border: 1px solid rgba(49, 243, 233, 0.18);
+  border-radius: 999px;
+  background:
+    linear-gradient(90deg, rgba(49, 243, 233, 0.1), rgba(25, 109, 255, 0.08), transparent),
+    rgba(3, 10, 18, 0.52);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.base-ready-strip span {
+  color: var(--cyan);
+  font-size: 0.72rem;
+  font-weight: 900;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.base-ready-strip strong {
+  font-size: 0.92rem;
+  letter-spacing: -0.02em;
+}
+
+.base-ready-strip small {
+  color: #bdefff;
+}
+
+.hero.hero-premium {
+  grid-template-columns: minmax(0, 0.95fr) minmax(340px, 0.9fr);
+}
+
+.hero-product-card {
+  width: min(100%, 400px);
+  gap: 16px;
+}
+
+.product-media {
+  min-height: 230px;
+}
+
+.product-media img {
+  width: min(82%, 300px);
+  max-height: 228px;
+}
+
+.product-progress i {
+  transition: width 520ms var(--ease-out);
+}
+
+.floating-stat {
+  font-size: 0.82rem;
+  text-transform: capitalize;
+}
+
+.admin-notification-panel select option {
+  background: #07111f;
+  color: var(--text);
+}
+
+@media (max-width: 980px) {
+  .wallet-menu {
+    max-width: 100%;
+  }
+
+  .wallet-button {
+    max-width: min(260px, 46vw);
+  }
+
+  .base-ready-strip {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    border-radius: 24px;
+  }
+
+  .hero.hero-premium {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 560px) {
+  .brand-lockup span {
+    display: none;
+  }
+
+  .wallet-button {
+    max-width: 52vw;
+    padding: 10px 12px;
+  }
+
+  .wallet-button span {
+    display: none;
+  }
+
+  .wallet-button strong {
+    max-width: 116px;
+  }
+
+  .base-ready-strip {
+    margin-top: -8px;
+    font-size: 0.84rem;
+  }
+
+  .base-ready-strip small {
+    display: none;
+  }
+
+  .hero.hero-premium {
+    padding: 28px 22px;
   }
 }
 
