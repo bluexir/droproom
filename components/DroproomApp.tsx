@@ -665,6 +665,7 @@ export function DroproomApp() {
       </header>
 
       <BaseReadyStrip />
+      <ViewRail activeView={view} onSelect={setActiveView} />
 
       {notice ? (
         <div className={`notice enter ${/indexed|collected|generated|uploaded/i.test(notice) ? "success" : ""}`}>
@@ -761,6 +762,9 @@ function BackgroundGlow() {
 
 function Hero({ featuredDrop, onCreate }: { featuredDrop?: Drop; onCreate: () => void }) {
   const progress = featuredDrop ? Math.min((featuredDrop.minted / featuredDrop.edition) * 100, 100) : 0;
+  const heroStatus = featuredDrop
+    ? `${featuredDrop.minted}/${featuredDrop.edition} collected on Base`
+    : "Real drops appear here after onchain publish.";
 
   return (
     <section className="hero hero-premium">
@@ -779,7 +783,7 @@ function Hero({ featuredDrop, onCreate }: { featuredDrop?: Drop; onCreate: () =>
         </div>
       </div>
       <div className="hero-art hero-media-shell">
-        <div className="hero-product-card" aria-hidden="true">
+        <div className={featuredDrop ? "hero-product-card live" : "hero-product-card"} aria-hidden="true">
           <div className="product-media">
             {featuredDrop ? (
               // eslint-disable-next-line @next/next/no-img-element
@@ -789,18 +793,17 @@ function Hero({ featuredDrop, onCreate }: { featuredDrop?: Drop; onCreate: () =>
             )}
           </div>
           <div className="product-copy">
-            <span>{featuredDrop ? "Featured live drop" : "Drop format"}</span>
-            <strong>{featuredDrop?.title ?? "Image or looping GIF"}</strong>
-            <div className="product-progress"><i style={{ width: `${featuredDrop ? progress : 68}%` }} /></div>
-            <small>
-              {featuredDrop
-                ? `${featuredDrop.minted}/${featuredDrop.edition} collected on Base`
-                : "Publish onchain, then share one clean mint link."}
-            </small>
+            <span>{featuredDrop ? "Featured live drop" : "Live media drops"}</span>
+            <strong>{featuredDrop?.title ?? "Publish image or 1s GIF editions"}</strong>
+            {featuredDrop ? <div className="product-progress"><i style={{ width: `${progress}%` }} /></div> : null}
+            <small>{heroStatus}</small>
+            <div className="product-badges">
+              <span>Base mainnet</span>
+              <span>IPFS media</span>
+              <span>{featuredDrop?.status ?? "Ready"}</span>
+            </div>
           </div>
         </div>
-        <div className="floating-stat top">Base ready</div>
-        <div className="floating-stat bottom">{featuredDrop ? featuredDrop.status : "Creator studio"}</div>
       </div>
     </section>
   );
@@ -810,9 +813,26 @@ function BaseReadyStrip() {
   return (
     <aside className="base-ready-strip">
       <span>Base App ready</span>
-      <strong>Save Droproom in Base App and enable notifications for new drops.</strong>
-      <small>Open app → save → allow notifications</small>
+      <strong>Save Droproom in Base App and enable notifications.</strong>
+      <small>New drops can open directly from alerts.</small>
     </aside>
+  );
+}
+
+function ViewRail({ activeView, onSelect }: { activeView: View; onSelect: (view: View) => void }) {
+  return (
+    <div className="view-rail" aria-label="Swipe navigation">
+      <span>Swipe</span>
+      {viewOrder.map((item) => (
+        <button
+          aria-label={`Open ${item}`}
+          className={activeView === item ? "active" : ""}
+          key={item}
+          onClick={() => onSelect(item)}
+          type="button"
+        />
+      ))}
+    </div>
   );
 }
 
