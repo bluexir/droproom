@@ -40,7 +40,8 @@ type BaseNotificationAdminResult = {
 type BaseNotificationAdminRequester = (input: BaseNotificationAdminInput) => Promise<BaseNotificationAdminResult>;
 
 const libraryKey = "droproom:library:v1";
-const brandIconPrimary = "/brand/droproom-premium-hero.png";
+const brandIconPrimary = "/brand/droproom-logo-main.png";
+const heroFallbackImage = "/brand/droproom-premium-hero.png";
 const viewOrder: View[] = ["explore", "create", "dashboard", "library"];
 
 const defaultDraft: StudioDraft = {
@@ -789,7 +790,7 @@ function Hero({ featuredDrop, onCreate }: { featuredDrop?: Drop; onCreate: () =>
               // eslint-disable-next-line @next/next/no-img-element
               <img alt="" src={featuredDrop.image} />
             ) : (
-              <Image alt="" className="hero-variant-image" height={720} priority src={brandIconPrimary} width={720} />
+              <Image alt="" className="hero-variant-image" height={720} priority src={heroFallbackImage} width={720} />
             )}
           </div>
           <div className="product-copy">
