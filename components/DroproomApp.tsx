@@ -19,6 +19,17 @@ import { useDroproomContract } from "@/hooks/useDroproomContract";
 import { dataUrlToFile, uploadFileToPinata, uploadJsonToPinata } from "@/lib/client/pinata-upload";
 import { getCreatorTokenEligibility } from "@/lib/eligibility";
 import type { Drop, StartMode, StudioDraft } from "@/lib/types";
+import { 
+  shareOnTwitter, 
+  shareOnFarcaster, 
+  shareOnReddit, 
+  shareNative,
+  copyToClipboard,
+  isBaseApp,
+  getShareText,
+  type ShareData 
+} from "@/lib/social-share";
+import { MintSuccessModal } from "@/components/MintSuccessModal";
 
 type View = "explore" | "create" | "dashboard" | "library";
 type CreateStep = "start" | "studio" | "review";
@@ -139,14 +150,23 @@ function getAppRootUrl() {
 
 function getDropShareLinks(drop: Drop): DropShareLinks {
   const permalink = getDropPermalink(drop.id);
-  const shareText = `Collect ${drop.title} on Droproom`;
+  
+  // Yeni share utilities'den gelen templates kullan
+  const shareData: ShareData = {
+    title: drop.title,
+    url: permalink,
+    creator: drop.creator,
+    remaining: Math.max(drop.edition - drop.minted, 0),
+    total: drop.edition
+  };
+  
+  const shareText = getShareText('collect', shareData);
+  
   const farcasterUrl = new URL("https://warpcast.com/~/compose");
   farcasterUrl.searchParams.set("text", shareText);
-  farcasterUrl.searchParams.append("embeds[]", permalink);
 
   const xUrl = new URL("https://twitter.com/intent/tweet");
   xUrl.searchParams.set("text", shareText);
-  xUrl.searchParams.set("url", permalink);
 
   const redditUrl = new URL("https://www.reddit.com/submit");
   redditUrl.searchParams.set("url", permalink);
@@ -214,6 +234,8 @@ export function DroproomApp() {
   const [publishPending, setPublishPending] = useState(false);
   const [publishedDropId, setPublishedDropId] = useState<string | null>(null);
   const [mintPending, setMintPending] = useState(false);
+  const [showMintSuccess, setShowMintSuccess] = useState(false);
+  const [mintedDropData, setMintedDropData] = useState<{drop: Drop; mintNumber: number} | null>(null);
   const [dropsLoading, setDropsLoading] = useState(true);
   const [showBaseGuide, setShowBaseGuide] = useState(false);
   const hasArtwork = Boolean(draft.image);
@@ -400,38 +422,28 @@ export function DroproomApp() {
 
   async function copyDropLink(drop: Drop) {
     const permalink = getDropPermalink(drop.id);
-    try {
-      await navigator.clipboard?.writeText(permalink);
-      setNotice("Drop link copied.");
-    } catch {
-      setNotice("Drop link could not be copied here.");
-    }
+    const success = await copyToClipboard(permalink);
+    setNotice(success ? "Link copied to clipboard! ✓" : "Could not copy link.");
   }
 
   async function shareDrop(drop: Drop) {
-    const links = getDropShareLinks(drop);
-    const payload = {
-      text: `${links.shareText} — ${links.baseApp}`,
+    const permalink = getDropPermalink(drop.id);
+    const shareData: ShareData = {
       title: drop.title,
-      url: links.baseApp
+      url: permalink,
+      creator: drop.creator,
+      remaining: Math.max(drop.edition - drop.minted, 0),
+      total: drop.edition
     };
-
-    if (!navigator.share) {
-      try {
-        await navigator.clipboard?.writeText(links.baseApp);
-        setNotice("Native share is not available here. Drop link copied.");
-      } catch {
-        setNotice("Native share is not available here.");
-      }
-      return;
-    }
-
-    try {
-      await navigator.share(payload);
+    
+    // Native share dene, yoksa fallback
+    const shared = await shareNative(shareData, 'collect');
+    if (shared) {
       setNotice("Share sheet opened.");
-    } catch (error) {
-      if (error instanceof Error && error.name === "AbortError") return;
-      setNotice(error instanceof Error ? error.message : "Share could not be opened.");
+    } else {
+      // Fallback: Link kopyala
+      const copied = await copyToClipboard(permalink);
+      setNotice(copied ? "Native share not available. Link copied! ✓" : "Share not available.");
     }
   }
 
@@ -696,6 +708,15 @@ export function DroproomApp() {
           [key]: [selectedDrop.id, ...existing.filter((id) => id !== selectedDrop.id)]
         };
       });
+      
+      // Mint başarılı - Success modal göster
+      const mintNumber = mintedEvent ? Number(mintedEvent.totalMinted) : selectedDrop.minted + 1;
+      setMintedDropData({
+        drop: selectedDrop,
+        mintNumber
+      });
+      setShowMintSuccess(true);
+      
       setNotice(`Collected on Base. ${result.basescanUrl}`);
       try {
         await saveMint({
@@ -807,6 +828,19 @@ export function DroproomApp() {
         <div className={`notice enter ${/indexed|collected|generated|uploaded/i.test(notice) ? "success" : ""}`}>
           {notice}
         </div>
+      ) : null}
+
+      {/* Mint Success Modal - Konfeti ile! */}
+      {showMintSuccess && mintedDropData ? (
+        <MintSuccessModal
+          drop={mintedDropData.drop}
+          mintNumber={mintedDropData.mintNumber}
+          onClose={() => {
+            setShowMintSuccess(false);
+            setMintedDropData(null);
+          }}
+          shareUrl={getDropPermalink(mintedDropData.drop.id)}
+        />
       ) : null}
 
       {view === "explore" ? (
@@ -969,19 +1003,21 @@ function BaseReadyStrip({
   showGuide: boolean;
 }) {
   const appRootUrl = getAppRootUrl();
+  
+  // Base App içindeysek bu komponenti hiç gösterme
+  if (isBaseApp()) {
+    return null;
+  }
 
   return (
     <>
       <aside className="base-ready-strip">
         <div className="base-ready-copy">
           <span>Base App ready</span>
-          <strong>Save Droproom in Base App and enable notifications.</strong>
-          <small>Open this app in Base App, save it from the app menu, then turn on notifications for future drops.</small>
+          <strong>Save Droproom to get notifications for new drops.</strong>
+          <small>Open in Base App, save from menu, enable notifications.</small>
           </div>
           <div className="base-ready-actions">
-            <a className="secondary-button" href={appRootUrl} rel="noreferrer" target="_blank">
-              Open app link
-            </a>
           <button className="secondary-button" onClick={onToggleGuide} type="button">
             {showGuide ? "Hide guide" : "How to save"}
           </button>
@@ -1100,15 +1136,48 @@ function DropDetail({
             </button>
           </div>
           <div className="drop-share-links">
-            <a href={shareLinks.x} rel="noreferrer" target="_blank">
+            <button 
+              onClick={() => {
+                const shareData: ShareData = {
+                  title: drop.title,
+                  url: shareLinks.baseApp,
+                  creator: drop.creator,
+                  remaining: Math.max(drop.edition - drop.minted, 0),
+                  total: drop.edition
+                };
+                shareOnTwitter(shareData, 'collect');
+              }}
+              type="button"
+            >
               X
-            </a>
-            <a href={shareLinks.farcaster} rel="noreferrer" target="_blank">
+            </button>
+            <button 
+              onClick={() => {
+                const shareData: ShareData = {
+                  title: drop.title,
+                  url: shareLinks.baseApp,
+                  creator: drop.creator,
+                  remaining: Math.max(drop.edition - drop.minted, 0),
+                  total: drop.edition
+                };
+                shareOnFarcaster(shareData, 'collect');
+              }}
+              type="button"
+            >
               Farcaster
-            </a>
-            <a href={shareLinks.reddit} rel="noreferrer" target="_blank">
+            </button>
+            <button 
+              onClick={() => {
+                const shareData: ShareData = {
+                  title: drop.title,
+                  url: shareLinks.baseApp
+                };
+                shareOnReddit(shareData);
+              }}
+              type="button"
+            >
               Reddit
-            </a>
+            </button>
           </div>
         </div>
         <p className="microcopy">
@@ -1159,23 +1228,51 @@ function PublishSuccessPanel({
             View create tx
           </a>
         ) : null}
-        <a className="secondary-button" href={shareLinks.baseApp} rel="noreferrer" target="_blank">
-          Open drop link
-        </a>
         <button className="secondary-button" onClick={onDismiss} type="button">
           Close
         </button>
       </div>
       <div className="drop-share-links">
-        <a href={shareLinks.x} rel="noreferrer" target="_blank">
+        <button 
+          onClick={() => {
+            const shareData: ShareData = {
+              title: drop.title,
+              url: shareLinks.baseApp,
+              creator: drop.creator,
+              total: drop.edition
+            };
+            shareOnTwitter(shareData, 'created');
+          }}
+          type="button"
+        >
           Share on X
-        </a>
-        <a href={shareLinks.farcaster} rel="noreferrer" target="_blank">
+        </button>
+        <button 
+          onClick={() => {
+            const shareData: ShareData = {
+              title: drop.title,
+              url: shareLinks.baseApp,
+              creator: drop.creator,
+              total: drop.edition
+            };
+            shareOnFarcaster(shareData, 'created');
+          }}
+          type="button"
+        >
           Share on Farcaster
-        </a>
-        <a href={shareLinks.reddit} rel="noreferrer" target="_blank">
+        </button>
+        <button 
+          onClick={() => {
+            const shareData: ShareData = {
+              title: drop.title,
+              url: shareLinks.baseApp
+            };
+            shareOnReddit(shareData);
+          }}
+          type="button"
+        >
           Share on Reddit
-        </a>
+        </button>
       </div>
     </section>
   );
