@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
+import type { Address } from "viem";
 
+import { readDropBalance, readDroproomSummary } from "@/lib/contract";
 import { getBasescanTxUrl } from "@/lib/contract/links";
 import { verifyDropMintedTx } from "@/lib/server/chain-events";
 import { supabaseRest } from "@/lib/server/supabase-rest";
@@ -25,11 +27,21 @@ export async function GET(request: Request) {
   }
 
   try {
-    const rows = await supabaseRest<MintRow[]>(
-      `mints?select=*&collector_address=eq.${encodeURIComponent(wallet)}&order=created_at.desc&limit=100`
-    );
+    let rows: MintRow[] = [];
 
-    return NextResponse.json({ mints: rows });
+    try {
+      rows = await supabaseRest<MintRow[]>(
+        `mints?select=*&collector_address=eq.${encodeURIComponent(wallet)}&order=created_at.desc&limit=100`
+      );
+    } catch (error) {
+      console.error("Mint index fetch failed", error);
+    }
+
+    const discoveredRows = await discoverWalletMints(wallet as Address);
+    const seenTokenIds = new Set(rows.map((row) => row.token_id));
+    const mergedRows = [...rows, ...discoveredRows.filter((row) => !seenTokenIds.has(row.token_id))];
+
+    return NextResponse.json({ mints: mergedRows });
   } catch (error) {
     console.error("Mint fetch failed", error);
     return NextResponse.json({ mints: [], error: "Mints are not available yet." }, { status: 503 });
@@ -77,5 +89,41 @@ export async function POST(request: Request) {
   } catch (error) {
     console.error("Mint save failed", error);
     return NextResponse.json({ error: "Mint succeeded but could not be indexed yet." }, { status: 502 });
+  }
+}
+
+async function discoverWalletMints(wallet: Address): Promise<MintRow[]> {
+  try {
+    const summary = await readDroproomSummary();
+    const latestTokenId = Number(summary.nextTokenId) - 1;
+    if (latestTokenId < 1) return [];
+
+    const tokenIds = Array.from({ length: latestTokenId }, (_, index) => String(latestTokenId - index));
+    const balances = await Promise.all(
+      tokenIds.map(async (tokenId) => {
+        try {
+          const balance = await readDropBalance(wallet, tokenId);
+          return balance > 0n ? tokenId : null;
+        } catch {
+          return null;
+        }
+      })
+    );
+
+    return balances
+      .filter((tokenId): tokenId is string => Boolean(tokenId))
+      .map((tokenId) => ({
+        basescan_url: null,
+        collector_address: wallet,
+        created_at: new Date(0).toISOString(),
+        id: `chain-${wallet}-${tokenId}`,
+        paid_wei: "0",
+        quantity: 1,
+        token_id: tokenId,
+        tx_hash: `chain-${tokenId}`
+      }));
+  } catch (error) {
+    console.error("Onchain mint discovery failed", error);
+    return [];
   }
 }

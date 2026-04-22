@@ -1,7 +1,7 @@
 ﻿"use client";
 
 import Image from "next/image";
-import { useEffect, useState, type ReactNode, type TouchEvent } from "react";
+import { useCallback, useEffect, useState, type ReactNode, type TouchEvent } from "react";
 import { parseEther } from "viem";
 
 import {
@@ -38,6 +38,13 @@ type BaseNotificationAdminResult = {
   users?: string[];
 };
 type BaseNotificationAdminRequester = (input: BaseNotificationAdminInput) => Promise<BaseNotificationAdminResult>;
+type DropShareLinks = {
+  baseApp: string;
+  farcaster: string;
+  reddit: string;
+  shareText: string;
+  x: string;
+};
 
 const libraryKey = "droproom:library:v1";
 const brandIconPrimary = "/brand/droproom-logo-main.png";
@@ -110,6 +117,50 @@ function extensionForDataUrl(dataUrl: string) {
   return "png";
 }
 
+function resolveAppOrigin() {
+  const configured = process.env.NEXT_PUBLIC_APP_URL?.trim() || "https://baseappdroproom.com";
+  const canonical = configured.replace(/\/+$/, "");
+
+  if (typeof window === "undefined") return canonical;
+
+  const currentOrigin = `${window.location.protocol}//${window.location.host}`;
+  return /localhost|127\.0\.0\.1/i.test(window.location.host) ? currentOrigin : canonical;
+}
+
+function getDropPermalink(dropId?: string) {
+  const url = new URL(resolveAppOrigin());
+  if (dropId) url.searchParams.set("drop", dropId);
+  return url.toString();
+}
+
+function getAppRootUrl() {
+  return resolveAppOrigin();
+}
+
+function getDropShareLinks(drop: Drop): DropShareLinks {
+  const permalink = getDropPermalink(drop.id);
+  const shareText = `Collect ${drop.title} on Droproom`;
+  const farcasterUrl = new URL("https://warpcast.com/~/compose");
+  farcasterUrl.searchParams.set("text", shareText);
+  farcasterUrl.searchParams.append("embeds[]", permalink);
+
+  const xUrl = new URL("https://twitter.com/intent/tweet");
+  xUrl.searchParams.set("text", shareText);
+  xUrl.searchParams.set("url", permalink);
+
+  const redditUrl = new URL("https://www.reddit.com/submit");
+  redditUrl.searchParams.set("url", permalink);
+  redditUrl.searchParams.set("title", drop.title);
+
+  return {
+    baseApp: permalink,
+    farcaster: farcasterUrl.toString(),
+    reddit: redditUrl.toString(),
+    shareText,
+    x: xUrl.toString()
+  };
+}
+
 function isInteractiveTarget(target: EventTarget | null) {
   if (!(target instanceof Element)) return false;
 
@@ -161,8 +212,10 @@ export function DroproomApp() {
   const [walletMenuOpen, setWalletMenuOpen] = useState(false);
   const [touchStart, setTouchStart] = useState<{ target: EventTarget | null; x: number; y: number } | null>(null);
   const [publishPending, setPublishPending] = useState(false);
+  const [publishedDropId, setPublishedDropId] = useState<string | null>(null);
   const [mintPending, setMintPending] = useState(false);
   const [dropsLoading, setDropsLoading] = useState(true);
+  const [showBaseGuide, setShowBaseGuide] = useState(false);
   const hasArtwork = Boolean(draft.image);
   const walletAddress = droproom.account ?? "";
 
@@ -176,12 +229,8 @@ export function DroproomApp() {
     safeStorageSet(libraryKey, libraryByWallet);
   }, [libraryByWallet]);
 
-  useEffect(() => {
-    if (!walletAddress) return;
-    void loadMintLibrary(walletAddress);
-  }, [walletAddress]);
-
   const selectedDrop = drops.find((drop) => drop.id === selectedDropId) ?? drops[0];
+  const publishedDrop = publishedDropId ? drops.find((drop) => drop.id === publishedDropId) ?? null : null;
   const activeLibrary = walletAddress ? libraryByWallet[walletAddress.toLowerCase()] ?? [] : [];
   const creatorDrops = drops.filter((drop) => drop.creatorAddress?.toLowerCase() === walletAddress.toLowerCase());
   const soldOutDrops = drops.filter((drop) => drop.status === "sold-out" || drop.minted >= drop.edition).slice(0, 4);
@@ -198,14 +247,22 @@ export function DroproomApp() {
   async function loadDrops() {
     try {
       setDropsLoading(true);
-      const response = await fetch("/api/drops", { cache: "no-store" });
+      const requestedDropId = new URLSearchParams(window.location.search).get("drop");
+      const endpoint = requestedDropId ? `/api/drops?drop=${encodeURIComponent(requestedDropId)}` : "/api/drops";
+      const response = await fetch(endpoint, { cache: "no-store" });
       const payload = (await response.json()) as { drops?: Drop[]; error?: string };
       const nextDrops = payload.drops ?? [];
-      const requestedDropId = new URLSearchParams(window.location.search).get("drop");
       const requestedDrop = requestedDropId ? nextDrops.find((drop) => drop.id === requestedDropId || drop.tokenId === requestedDropId) : null;
       setDrops(nextDrops);
-      setSelectedDropId((current) => requestedDrop?.id ?? current ?? nextDrops[0]?.id ?? null);
-      if (!response.ok && payload.error) setNotice(payload.error);
+      setSelectedDropId((current) => {
+        if (requestedDropId) return requestedDrop?.id ?? null;
+        return current ?? nextDrops[0]?.id ?? null;
+      });
+      if (requestedDropId && !requestedDrop) {
+        setNotice("This shared drop is still indexing or unavailable right now.");
+      } else if (!response.ok && payload.error) {
+        setNotice(payload.error);
+      }
     } catch {
       setNotice("Live drops could not be loaded yet.");
     } finally {
@@ -248,7 +305,35 @@ export function DroproomApp() {
     return payload ?? {};
   }
 
-  async function loadMintLibrary(address: string) {
+  const hydrateDropsByIds = useCallback(async (tokenIds: string[]) => {
+    const missingIds = [...new Set(tokenIds)];
+
+    if (!missingIds.length) return;
+
+    const hydrated = await Promise.all(
+      missingIds.map(async (tokenId) => {
+        try {
+          const response = await fetch(`/api/drops?drop=${encodeURIComponent(tokenId)}`, { cache: "no-store" });
+          const payload = (await response.json()) as { drops?: Drop[] };
+          return payload.drops?.find((drop) => drop.id === tokenId || drop.tokenId === tokenId) ?? null;
+        } catch {
+          return null;
+        }
+      })
+    );
+
+    const nextDrops = hydrated.filter((drop): drop is Drop => Boolean(drop));
+    if (!nextDrops.length) return;
+
+    setDrops((current) => {
+      const knownIds = new Set(
+        current.flatMap((drop) => [drop.id, drop.tokenId].filter((value): value is string => Boolean(value)))
+      );
+      return [...current, ...nextDrops.filter((drop) => !knownIds.has(drop.id) && !knownIds.has(drop.tokenId ?? ""))];
+    });
+  }, []);
+
+  const loadMintLibrary = useCallback(async (address: string) => {
     try {
       const response = await fetch(`/api/mints?wallet=${encodeURIComponent(address.toLowerCase())}`, { cache: "no-store" });
       const payload = (await response.json()) as { mints?: Array<{ token_id: string }> };
@@ -257,10 +342,16 @@ export function DroproomApp() {
         ...current,
         [address.toLowerCase()]: tokenIds
       }));
+      await hydrateDropsByIds(tokenIds);
     } catch {
       // Library is helpful, but mint ownership is still enforced by the chain.
     }
-  }
+  }, [hydrateDropsByIds]);
+
+  useEffect(() => {
+    if (!walletAddress) return;
+    void loadMintLibrary(walletAddress);
+  }, [loadMintLibrary, walletAddress]);
 
   async function connectWallet() {
     try {
@@ -299,8 +390,49 @@ export function DroproomApp() {
 
   async function copyWalletAddress() {
     if (!walletAddress) return;
-    await navigator.clipboard?.writeText(walletAddress);
-    setNotice("Wallet address copied.");
+    try {
+      await navigator.clipboard?.writeText(walletAddress);
+      setNotice("Wallet address copied.");
+    } catch {
+      setNotice("Wallet address could not be copied here.");
+    }
+  }
+
+  async function copyDropLink(drop: Drop) {
+    const permalink = getDropPermalink(drop.id);
+    try {
+      await navigator.clipboard?.writeText(permalink);
+      setNotice("Drop link copied.");
+    } catch {
+      setNotice("Drop link could not be copied here.");
+    }
+  }
+
+  async function shareDrop(drop: Drop) {
+    const links = getDropShareLinks(drop);
+    const payload = {
+      text: `${links.shareText} — ${links.baseApp}`,
+      title: drop.title,
+      url: links.baseApp
+    };
+
+    if (!navigator.share) {
+      try {
+        await navigator.clipboard?.writeText(links.baseApp);
+        setNotice("Native share is not available here. Drop link copied.");
+      } catch {
+        setNotice("Native share is not available here.");
+      }
+      return;
+    }
+
+    try {
+      await navigator.share(payload);
+      setNotice("Share sheet opened.");
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") return;
+      setNotice(error instanceof Error ? error.message : "Share could not be opened.");
+    }
   }
 
   function handleTouchStart(event: TouchEvent<HTMLElement>) {
@@ -494,7 +626,9 @@ export function DroproomApp() {
       };
 
       setDrops((current) => [drop, ...current.filter((item) => item.id !== drop.id)]);
-      setSelectedDropId(drop.id);
+      selectDrop(drop.id);
+      setPublishedDropId(drop.id);
+      setShowBaseGuide(true);
       setCreateStep("start");
       setDraft({ ...defaultDraft, image: "" });
       setAiPrompt("");
@@ -505,7 +639,8 @@ export function DroproomApp() {
       try {
         const indexedDrop = await saveDrop(drop);
         setDrops((current) => [indexedDrop, ...current.filter((item) => item.id !== indexedDrop.id)]);
-        setSelectedDropId(indexedDrop.id);
+        selectDrop(indexedDrop.id);
+        setPublishedDropId(indexedDrop.id);
         setNotice(`Drop is live and indexed on Base. Token #${indexedDrop.tokenId}.`);
       } catch (indexError) {
         setNotice(
@@ -665,7 +800,7 @@ export function DroproomApp() {
         </div>
       </header>
 
-      <BaseReadyStrip />
+      <BaseReadyStrip onToggleGuide={() => setShowBaseGuide((current) => !current)} showGuide={showBaseGuide} />
       <ViewRail activeView={view} onSelect={setActiveView} />
 
       {notice ? (
@@ -676,6 +811,14 @@ export function DroproomApp() {
 
       {view === "explore" ? (
         <section className="screen enter">
+          {publishedDrop ? (
+            <PublishSuccessPanel
+              drop={publishedDrop}
+              onCopyLink={() => void copyDropLink(publishedDrop)}
+              onDismiss={() => setPublishedDropId(null)}
+              onShare={() => void shareDrop(publishedDrop)}
+            />
+          ) : null}
           <Hero featuredDrop={selectedDrop} onCreate={() => setActiveView("create")} />
           <section className="content-grid">
             <div className="drop-grid">
@@ -695,7 +838,9 @@ export function DroproomApp() {
                 isMinting={mintPending}
                 isOwned={activeLibrary.includes(selectedDrop.id)}
                 isWalletConnected={Boolean(walletAddress)}
+                onCopyLink={() => void copyDropLink(selectedDrop)}
                 onMint={mintSelectedDrop}
+                onShare={() => void shareDrop(selectedDrop)}
               />
             ) : null}
           </section>
@@ -744,7 +889,13 @@ export function DroproomApp() {
 
       {view === "library" ? (
         <section className="screen library-screen enter">
-          <LibraryView drops={drops.filter((drop) => activeLibrary.includes(drop.id))} />
+          <LibraryView
+            drops={drops.filter((drop) => activeLibrary.includes(drop.id))}
+            onOpenDrop={(id) => {
+              selectDrop(id);
+              setActiveView("explore");
+            }}
+          />
         </section>
       ) : null}
     </main>
@@ -810,13 +961,43 @@ function Hero({ featuredDrop, onCreate }: { featuredDrop?: Drop; onCreate: () =>
   );
 }
 
-function BaseReadyStrip() {
+function BaseReadyStrip({
+  onToggleGuide,
+  showGuide
+}: {
+  onToggleGuide: () => void;
+  showGuide: boolean;
+}) {
+  const appRootUrl = getAppRootUrl();
+
   return (
-    <aside className="base-ready-strip">
-      <span>Base App ready</span>
-      <strong>Save Droproom in Base App and enable notifications.</strong>
-      <small>New drops can open directly from alerts.</small>
-    </aside>
+    <>
+      <aside className="base-ready-strip">
+        <div className="base-ready-copy">
+          <span>Base App ready</span>
+          <strong>Save Droproom in Base App and enable notifications.</strong>
+          <small>Open this app in Base App, save it from the app menu, then turn on notifications for future drops.</small>
+          </div>
+          <div className="base-ready-actions">
+            <a className="secondary-button" href={appRootUrl} rel="noreferrer" target="_blank">
+              Open app link
+            </a>
+          <button className="secondary-button" onClick={onToggleGuide} type="button">
+            {showGuide ? "Hide guide" : "How to save"}
+          </button>
+        </div>
+      </aside>
+      {showGuide ? (
+        <div className="base-guide">
+          <p className="eyebrow">Base app setup</p>
+          <ol className="base-guide-steps">
+            <li>Open Droproom inside Base App.</li>
+            <li>Use the app menu to save or pin Droproom.</li>
+            <li>Enable notifications so new drops can open directly from alerts.</li>
+          </ol>
+        </div>
+      ) : null}
+    </>
   );
 }
 
@@ -870,17 +1051,22 @@ function DropDetail({
   isMinting,
   isOwned,
   isWalletConnected,
-  onMint
+  onCopyLink,
+  onMint,
+  onShare
 }: {
   drop: Drop;
   isMinting: boolean;
   isOwned: boolean;
   isWalletConnected: boolean;
+  onCopyLink: () => void;
   onMint: () => void;
+  onShare: () => void;
 }) {
   const remaining = Math.max(drop.edition - drop.minted, 0);
   const soldOut = remaining === 0;
   const progress = Math.min((drop.minted / drop.edition) * 100, 100);
+  const shareLinks = getDropShareLinks(drop);
 
   return (
     <aside className="drop-detail">
@@ -903,6 +1089,28 @@ function DropDetail({
         <button className="primary-button wide" disabled={soldOut || isOwned || isMinting} onClick={onMint} type="button">
           {soldOut ? "Sold out" : isOwned ? "Collected" : isMinting ? "Minting..." : isWalletConnected ? "Mint on Base" : "Connect Base Wallet"} <span>Base</span>
         </button>
+        <div className="drop-share">
+          <strong>Share this drop</strong>
+          <div className="drop-share-row">
+            <button className="secondary-button" onClick={onCopyLink} type="button">
+              Copy link
+            </button>
+            <button className="secondary-button" onClick={onShare} type="button">
+              Share now
+            </button>
+          </div>
+          <div className="drop-share-links">
+            <a href={shareLinks.x} rel="noreferrer" target="_blank">
+              X
+            </a>
+            <a href={shareLinks.farcaster} rel="noreferrer" target="_blank">
+              Farcaster
+            </a>
+            <a href={shareLinks.reddit} rel="noreferrer" target="_blank">
+              Reddit
+            </a>
+          </div>
+        </div>
         <p className="microcopy">
           Free mint means NFT price is 0. Network gas is paid by your connected Base Account.
           {drop.basescanUrl ? (
@@ -916,6 +1124,60 @@ function DropDetail({
         </p>
       </div>
     </aside>
+  );
+}
+
+function PublishSuccessPanel({
+  drop,
+  onCopyLink,
+  onDismiss,
+  onShare
+}: {
+  drop: Drop;
+  onCopyLink: () => void;
+  onDismiss: () => void;
+  onShare: () => void;
+}) {
+  const shareLinks = getDropShareLinks(drop);
+
+  return (
+    <section className="publish-success-panel">
+      <div>
+        <p className="eyebrow">Drop live</p>
+        <h2>{drop.title} is live on Base.</h2>
+        <p>Share it now so collectors can open this edition directly and mint from the drop link.</p>
+      </div>
+      <div className="publish-success-actions">
+        <button className="primary-button" onClick={onCopyLink} type="button">
+          Copy link <span>Live</span>
+        </button>
+        <button className="secondary-button" onClick={onShare} type="button">
+          Share now
+        </button>
+        {drop.basescanUrl ? (
+          <a className="secondary-button" href={drop.basescanUrl} rel="noreferrer" target="_blank">
+            View create tx
+          </a>
+        ) : null}
+        <a className="secondary-button" href={shareLinks.baseApp} rel="noreferrer" target="_blank">
+          Open drop link
+        </a>
+        <button className="secondary-button" onClick={onDismiss} type="button">
+          Close
+        </button>
+      </div>
+      <div className="drop-share-links">
+        <a href={shareLinks.x} rel="noreferrer" target="_blank">
+          Share on X
+        </a>
+        <a href={shareLinks.farcaster} rel="noreferrer" target="_blank">
+          Share on Farcaster
+        </a>
+        <a href={shareLinks.reddit} rel="noreferrer" target="_blank">
+          Share on Reddit
+        </a>
+      </div>
+    </section>
   );
 }
 
@@ -1379,7 +1641,7 @@ function BaseNotificationAdminPanel({ drops, onRequest }: { drops: Drop[]; onReq
   );
 }
 
-function LibraryView({ drops }: { drops: Drop[] }) {
+function LibraryView({ drops, onOpenDrop }: { drops: Drop[]; onOpenDrop: (id: string) => void }) {
   return (
     <section className="library-view">
       <p className="eyebrow">Collector library</p>
@@ -1387,7 +1649,7 @@ function LibraryView({ drops }: { drops: Drop[] }) {
       {drops.length ? (
         <div className="drop-grid compact">
           {drops.map((drop) => (
-            <DropCard drop={drop} isSelected={false} key={drop.id} onClick={() => null} />
+            <DropCard drop={drop} isSelected={false} key={drop.id} onClick={() => onOpenDrop(drop.id)} />
           ))}
         </div>
       ) : (

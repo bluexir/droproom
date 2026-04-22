@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { formatEther } from "viem";
 
 import { readDrop } from "@/lib/contract";
 import { getBasescanTxUrl } from "@/lib/contract/links";
@@ -62,14 +63,34 @@ function toDrop(row: DropRow): Drop {
   };
 }
 
-export async function GET() {
-  try {
-    const rows = await supabaseRest<DropRow[]>(
-      "drops?select=*&order=created_at.desc&limit=60"
-    );
-    const syncedRows = await Promise.all(rows.map(syncRowWithChain));
+export async function GET(request: Request) {
+  const requestedDropId = new URL(request.url).searchParams.get("drop")?.trim() ?? "";
 
-    return NextResponse.json({ drops: syncedRows.map(toDrop) });
+  try {
+    let rows: DropRow[] = [];
+
+    try {
+      rows = await supabaseRest<DropRow[]>("drops?select=*&order=created_at.desc&limit=60");
+    } catch (error) {
+      if (!requestedDropId) throw error;
+      console.error("Recent drop fetch failed", error);
+    }
+
+    const syncedRows = await Promise.all(rows.map(syncRowWithChain));
+    const requestedDbRow = requestedDropId
+      ? await readRequestedDropRow(requestedDropId, syncedRows)
+      : null;
+    const requestedDrop =
+      requestedDbRow
+        ? toDrop(await syncRowWithChain(requestedDbRow))
+        : requestedDropId
+          ? await buildChainFallbackDrop(requestedDropId)
+          : null;
+    const drops = requestedDrop
+      ? [requestedDrop, ...syncedRows.map(toDrop).filter((drop) => drop.id !== requestedDrop.id)]
+      : syncedRows.map(toDrop);
+
+    return NextResponse.json({ drops });
   } catch (error) {
     console.error("Drop fetch failed", error);
     return NextResponse.json({ drops: [], error: "Drops are not available yet." }, { status: 503 });
@@ -88,6 +109,20 @@ async function syncRowWithChain(row: DropRow): Promise<DropRow> {
     };
   } catch {
     return row;
+  }
+}
+
+async function readRequestedDropRow(tokenId: string, recentRows: DropRow[]) {
+  const existing = recentRows.find((row) => row.token_id === tokenId);
+  if (existing) return existing;
+
+  try {
+    const rows = await supabaseRest<DropRow[]>(
+      `drops?select=*&token_id=eq.${encodeURIComponent(tokenId)}&limit=1`
+    );
+    return rows[0] ?? null;
+  } catch {
+    return null;
   }
 }
 
@@ -174,4 +209,41 @@ async function fetchMetadata(metadataUri: string): Promise<NftMetadata> {
 function readMetadataAttribute(metadata: NftMetadata, traitName: string) {
   const attribute = metadata.attributes?.find((item) => item.trait_type === traitName);
   return typeof attribute?.value === "string" ? attribute.value : null;
+}
+
+async function buildChainFallbackDrop(tokenId: string): Promise<Drop | null> {
+  try {
+    const onchain = await readDrop(tokenId);
+    if (!onchain.metadataURI) return null;
+
+    const metadata = await fetchMetadata(onchain.metadataURI);
+    const imageUri = typeof metadata.image === "string" ? metadata.image : "";
+    const minted = Number(onchain.minted);
+
+    return {
+      basescanUrl: undefined,
+      collectors: [],
+      createdAt: new Date(0).toISOString(),
+      creator: shortAddress(onchain.creator),
+      creatorAddress: onchain.creator,
+      description: typeof metadata.description === "string" ? metadata.description : "",
+      edition: onchain.maxSupply,
+      id: tokenId,
+      image: imageUri ? ipfsUriToGatewayUrl(imageUri) : "",
+      imageIpfsUri: imageUri.startsWith("ipfs://") ? imageUri : undefined,
+      isFree: onchain.price === 0n,
+      mediaType: readMetadataAttribute(metadata, "Media Type") ?? undefined,
+      metadataUri: onchain.metadataURI,
+      minted,
+      price: Number(formatEther(onchain.price)),
+      priceWei: onchain.price.toString(),
+      status: onchain.soldOut || minted >= onchain.maxSupply ? "sold-out" : "live",
+      title: typeof metadata.name === "string" ? metadata.name : `Drop #${tokenId}`,
+      tokenId,
+      txHash: undefined
+    };
+  } catch (error) {
+    console.error("Chain fallback drop fetch failed", error);
+    return null;
+  }
 }
