@@ -1,139 +1,106 @@
-// components/MintSuccessModal.tsx
 "use client";
 
-import { useEffect } from "react";
-import confetti from "canvas-confetti";
-import { shareOnTwitter, shareOnFarcaster, shareOnReddit, shareNative, copyToClipboard, type ShareData } from "@/lib/social-share";
+import { useEffect, useMemo, useState } from "react";
 
-interface MintSuccessModalProps {
+import { copyToClipboard, shareOnFarcaster, shareOnReddit, shareOnX, type ShareData } from "@/lib/social-share";
+
+type MintSuccessModalProps = {
   drop: {
-    id: string;
-    title: string;
-    image: string;
+    creator?: string;
     edition: number;
+    image: string;
     minted: number;
+    title: string;
   };
   mintNumber: number;
   onClose: () => void;
+  onOpenLibrary: () => void;
   shareUrl: string;
-}
+};
 
-export function MintSuccessModal({ drop, mintNumber, onClose, shareUrl }: MintSuccessModalProps) {
-  // Konfeti patlatma - modal açıldığında
+export function MintSuccessModal({ drop, mintNumber, onClose, onOpenLibrary, shareUrl }: MintSuccessModalProps) {
+  const [feedback, setFeedback] = useState("");
+
+  const shareData = useMemo<ShareData>(
+    () => ({
+      creator: drop.creator,
+      edition: drop.edition,
+      remaining: Math.max(drop.edition - drop.minted, 0),
+      title: drop.title,
+      url: shareUrl
+    }),
+    [drop.creator, drop.edition, drop.minted, drop.title, shareUrl]
+  );
+
   useEffect(() => {
-    // İlk konfeti patlaması
-    confetti({
-      particleCount: 100,
-      spread: 70,
-      origin: { y: 0.6 },
-      colors: ['#31F3E9', '#196DFF', '#8BF5FF', '#FFFFFF']
-    });
-
-    // 0.3 saniye sonra ikinci patlama
-    const timeout1 = setTimeout(() => {
-      confetti({
-        particleCount: 50,
-        angle: 60,
-        spread: 55,
-        origin: { x: 0, y: 0.6 },
-        colors: ['#31F3E9', '#196DFF']
-      });
-    }, 300);
-
-    // 0.6 saniye sonra üçüncü patlama
-    const timeout2 = setTimeout(() => {
-      confetti({
-        particleCount: 50,
-        angle: 120,
-        spread: 55,
-        origin: { x: 1, y: 0.6 },
-        colors: ['#8BF5FF', '#FFFFFF']
-      });
-    }, 600);
-
-    return () => {
-      clearTimeout(timeout1);
-      clearTimeout(timeout2);
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
     };
-  }, []);
 
-  const shareData: ShareData = {
-    title: drop.title,
-    url: shareUrl,
-    remaining: drop.edition - drop.minted,
-    total: drop.edition
-  };
+    window.addEventListener("keydown", handleEscape);
+    return () => window.removeEventListener("keydown", handleEscape);
+  }, [onClose]);
 
-  const handleCopyLink = async () => {
-    const success = await copyToClipboard(shareUrl);
-    if (success) {
-      // UI feedback - notice sistemini kullan
-      alert('Link copied to clipboard! ✓');
-    }
-  };
-
-  const handleShare = async () => {
-    // Önce native share dene
-    const shared = await shareNative(shareData, 'minted');
-    if (!shared) {
-      // Fallback: X'e yönlendir
-      shareOnTwitter(shareData, 'minted');
-    }
-  };
+  async function handleCopy() {
+    const copied = await copyToClipboard(shareUrl);
+    setFeedback(copied ? "Mint link copied." : "Mint link could not be copied here.");
+  }
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="mint-success-modal" onClick={(e) => e.stopPropagation()}>
-        <div className="success-icon">🎉</div>
-        
-        <h2>Mint Successful!</h2>
-        <p className="success-message">
-          You own <strong>#{mintNumber}</strong> of {drop.edition}
-        </p>
-
-        <div className="success-nft-preview">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={drop.image} alt={drop.title} />
-          <span className="nft-title">{drop.title}</span>
+      <section aria-modal="true" className="mint-success-modal" onClick={(event) => event.stopPropagation()} role="dialog">
+        <div className="mint-success-burst" aria-hidden="true">
+          <span />
+          <span />
+          <span />
+          <span />
+          <span />
+          <span />
         </div>
 
-        <div className="success-actions">
-          <button className="primary-button wide" onClick={handleCopyLink}>
-            Copy Link ✓
+        <div className="mint-success-badge">Collected on Base</div>
+        <h2>You minted #{mintNumber}.</h2>
+        <p className="mint-success-copy">
+          <strong>{drop.title}</strong> is now in your collection. Share it while collectors can still open the live drop.
+        </p>
+
+        <div className="mint-success-art">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img alt={drop.title} src={drop.image} />
+        </div>
+
+        <div className="mint-success-stats">
+          <span>{Math.max(drop.edition - drop.minted, 0)} left</span>
+          <span>{drop.minted}/{drop.edition} minted</span>
+        </div>
+
+        <div className="mint-success-actions">
+          <button className="primary-button" onClick={onOpenLibrary} type="button">
+            View library <span>Collected</span>
           </button>
-          <button className="secondary-button wide" onClick={handleShare}>
-            Share Your Mint
+          <button className="secondary-button" onClick={handleCopy} type="button">
+            Copy link
           </button>
         </div>
 
         <div className="social-share-row">
-          <button 
-            className="social-button x-button"
-            onClick={() => shareOnTwitter(shareData, 'minted')}
-            type="button"
-          >
-            <span>𝕏</span>
+          <button className="social-chip" onClick={() => shareOnX(shareData, "minted")} type="button">
+            X
           </button>
-          <button 
-            className="social-button farcaster-button"
-            onClick={() => shareOnFarcaster(shareData, 'minted')}
-            type="button"
-          >
-            <span>⬡</span>
+          <button className="social-chip" onClick={() => shareOnFarcaster(shareData, "minted")} type="button">
+            Farcaster
           </button>
-          <button 
-            className="social-button reddit-button"
-            onClick={() => shareOnReddit(shareData)}
-            type="button"
-          >
-            <span>▲</span>
+          <button className="social-chip" onClick={() => shareOnReddit(shareData, "minted")} type="button">
+            Reddit
           </button>
         </div>
 
-        <button className="close-modal-button" onClick={onClose}>
+        {feedback ? <p className="mint-success-feedback">{feedback}</p> : null}
+
+        <button className="close-modal-button" onClick={onClose} type="button">
           Close
         </button>
-      </div>
+      </section>
     </div>
   );
 }

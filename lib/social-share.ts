@@ -1,147 +1,149 @@
-// lib/social-share.ts
-// Sosyal medya paylaşım utilities
+"use client";
 
-export interface ShareData {
+export type ShareIntent = "created" | "minted" | "collect";
+
+export type ShareData = {
+  creator?: string;
+  edition?: number;
+  remaining?: number;
   title: string;
   url: string;
-  creator?: string;
-  description?: string;
-  remaining?: number;
-  total?: number;
+};
+
+const MOBILE_APP_FALLBACK_DELAY = 900;
+
+function getShareText(intent: ShareIntent, data: ShareData) {
+  if (intent === "created") {
+    const editionLabel = data.edition ? `${data.edition} edition${data.edition === 1 ? "" : "s"}` : "limited editions";
+    return `I just launched "${data.title}" on Droproom. ${editionLabel} are now live on Base.`;
+  }
+
+  if (intent === "minted") {
+    const scarcity = typeof data.remaining === "number" ? (data.remaining > 0 ? ` Only ${data.remaining} left.` : " It is now sold out.") : "";
+    return `I just collected "${data.title}" on Droproom.${scarcity}`;
+  }
+
+  return `Collect "${data.title}" on Droproom${data.creator ? ` by ${data.creator}` : ""}.`;
 }
 
-export type ShareType = 'minted' | 'created' | 'milestone' | 'collect';
+export function openExternalUrl(url: string) {
+  if (typeof window === "undefined") return;
 
-/**
- * Paylaşım metni template'leri
- * Kullanıcı deneyimi için hazır, doğal metinler
- */
-export const getShareText = (type: ShareType, data: ShareData): string => {
-  const templates: Record<ShareType, string> = {
-    minted: `Just minted "${data.title}" on @droproom_base 🎨\n\n${
-      data.remaining && data.total 
-        ? `Only ${data.remaining}/${data.total} left!` 
-        : 'Limited edition!'
-    }\n\n${data.url}`,
-    
-    created: `Dropped my new work "${data.title}" on Base ⚡️\n\n${
-      data.total ? `${data.total} editions` : 'Limited'
-    } • Free to collect\n\n${data.url}`,
-    
-    milestone: data.remaining && data.total && data.remaining < 10
-      ? `🔥 Almost sold out! "${data.title}" - only ${data.remaining} left\n\n${data.url}`
-      : `🔥 "${data.title}" is going fast on Base\n\n${data.url}`,
-    
-    collect: `Collect "${data.title}" on Droproom${data.creator ? ` by ${data.creator}` : ''}\n\n${data.url}`
-  };
-  
-  return templates[type];
-};
-
-/**
- * X (Twitter) Paylaşımı
- * WEB STANDARD - Hem desktop hem mobile çalışır
- */
-export const shareOnTwitter = (data: ShareData, type: ShareType = 'collect'): void => {
-  const text = getShareText(type, data);
-  
-  // Twitter web intent - her platformda çalışır
-  const twitterUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}`;
-  
-  // Popup pencere aç (Twitter'ın önerdiği boyut)
-  const width = 550;
-  const height = 420;
-  const left = window.innerWidth / 2 - width / 2;
-  const top = window.innerHeight / 2 - height / 2;
-  
-  window.open(
-    twitterUrl,
-    'twitter-share',
-    `width=${width},height=${height},left=${left},top=${top},toolbar=0,status=0,resizable=1`
-  );
-};
-
-/**
- * Farcaster (Warpcast) Paylaşımı
- */
-export const shareOnFarcaster = (data: ShareData, type: ShareType = 'collect'): void => {
-  const text = getShareText(type, data);
-  
-  const warpcastUrl = `https://warpcast.com/~/compose?text=${encodeURIComponent(text)}`;
-  
-  window.open(warpcastUrl, '_blank', 'noopener,noreferrer');
-};
-
-/**
- * Reddit Paylaşımı
- */
-export const shareOnReddit = (data: ShareData): void => {
-  const redditUrl = new URL('https://www.reddit.com/submit');
-  redditUrl.searchParams.set('url', data.url);
-  redditUrl.searchParams.set('title', data.title);
-  
-  window.open(redditUrl.toString(), '_blank', 'noopener,noreferrer');
-};
-
-/**
- * Native Share API (Mobile)
- * Eğer destekleniyorsa native share sheet'i kullan
- */
-export const shareNative = async (data: ShareData, type: ShareType = 'collect'): Promise<boolean> => {
-  if (!navigator.share) {
-    return false;
+  const popup = window.open(url, "_blank", "noopener,noreferrer");
+  if (popup) {
+    popup.opener = null;
+    return;
   }
-  
+
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.target = "_blank";
+  anchor.rel = "noopener noreferrer external";
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+}
+
+function isLikelyMobileDevice() {
+  if (typeof navigator === "undefined") return false;
+  return /android|iphone|ipad|ipod/i.test(navigator.userAgent);
+}
+
+function openNativeAppUrl(appUrl: string, webUrl: string) {
+  if (typeof window === "undefined") return;
+
+  if (!isLikelyMobileDevice()) {
+    openExternalUrl(webUrl);
+    return;
+  }
+
+  const fallbackTimer = window.setTimeout(() => {
+    openExternalUrl(webUrl);
+  }, MOBILE_APP_FALLBACK_DELAY);
+
+  const clearFallback = () => {
+    window.clearTimeout(fallbackTimer);
+    document.removeEventListener("visibilitychange", clearFallback);
+    window.removeEventListener("pagehide", clearFallback);
+  };
+
+  document.addEventListener("visibilitychange", clearFallback, { once: true });
+  window.addEventListener("pagehide", clearFallback, { once: true });
+  window.location.href = appUrl;
+}
+
+export function getXShareUrl(data: ShareData, intent: ShareIntent) {
+  const url = new URL("https://x.com/intent/tweet");
+  url.searchParams.set("text", getShareText(intent, data));
+  url.searchParams.set("url", data.url);
+  return url.toString();
+}
+
+export function getFarcasterShareUrl(data: ShareData, intent: ShareIntent) {
+  const url = new URL("https://warpcast.com/~/compose");
+  url.searchParams.set("text", getShareText(intent, data));
+  url.searchParams.append("embeds[]", data.url);
+  return url.toString();
+}
+
+export function getRedditShareUrl(data: ShareData, intent: ShareIntent) {
+  const url = new URL("https://www.reddit.com/submit");
+  url.searchParams.set("url", data.url);
+  url.searchParams.set("title", getShareText(intent, data));
+  return url.toString();
+}
+
+export function shareOnX(data: ShareData, intent: ShareIntent) {
+  const text = `${getShareText(intent, data)} ${data.url}`.trim();
+  const nativeUrl = `twitter://post?message=${encodeURIComponent(text)}`;
+  openNativeAppUrl(nativeUrl, getXShareUrl(data, intent));
+}
+
+export function shareOnFarcaster(data: ShareData, intent: ShareIntent) {
+  const text = getShareText(intent, data);
+  const nativeUrl = `warpcast://compose?text=${encodeURIComponent(text)}&embeds[]=${encodeURIComponent(data.url)}`;
+  openNativeAppUrl(nativeUrl, getFarcasterShareUrl(data, intent));
+}
+
+export function shareOnReddit(data: ShareData, intent: ShareIntent) {
+  const nativeUrl = `reddit://submit?url=${encodeURIComponent(data.url)}&title=${encodeURIComponent(getShareText(intent, data))}`;
+  openNativeAppUrl(nativeUrl, getRedditShareUrl(data, intent));
+}
+
+export async function shareNative(data: ShareData, intent: ShareIntent) {
+  if (!navigator.share) return false;
+
   try {
     await navigator.share({
+      text: getShareText(intent, data),
       title: data.title,
-      text: getShareText(type, data),
       url: data.url
     });
     return true;
-  } catch (error) {
-    // User cancelled or share failed
-    if (error instanceof Error && error.name === 'AbortError') {
-      // Kullanıcı iptal etti - bu bir hata değil
-      return false;
-    }
-    console.error('Share failed:', error);
+  } catch {
     return false;
   }
-};
+}
 
-/**
- * Copy link to clipboard
- */
-export const copyToClipboard = async (text: string): Promise<boolean> => {
+export async function copyToClipboard(text: string) {
   try {
     await navigator.clipboard.writeText(text);
     return true;
   } catch {
-    // Fallback: eski yöntem
-    const textArea = document.createElement('textarea');
+    const textArea = document.createElement("textarea");
     textArea.value = text;
-    textArea.style.position = 'fixed';
-    textArea.style.left = '-999999px';
+    textArea.style.position = "fixed";
+    textArea.style.left = "-999999px";
     document.body.appendChild(textArea);
     textArea.select();
+
     try {
-      document.execCommand('copy');
-      document.body.removeChild(textArea);
+      document.execCommand("copy");
+      textArea.remove();
       return true;
     } catch {
-      document.body.removeChild(textArea);
+      textArea.remove();
       return false;
     }
   }
-};
-
-/**
- * Base App detection
- * Base App içinde miyiz kontrol et
- */
-export const isBaseApp = (): boolean => {
-  if (typeof window === 'undefined') return false;
-  
-  return /BaseApp|Base\/[0-9]/i.test(navigator.userAgent);
-};
+}
