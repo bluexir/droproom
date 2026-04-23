@@ -1,5 +1,6 @@
 "use client";
 
+import confetti from "canvas-confetti";
 import { useEffect, useMemo, useState } from "react";
 
 import { copyToClipboard, shareOnFarcaster, shareOnReddit, shareOnX, type ShareData } from "@/lib/social-share";
@@ -31,6 +32,29 @@ export function MintSuccessModal({ drop, mintNumber, onClose, onOpenLibrary, sha
     }),
     [drop.creator, drop.edition, drop.minted, drop.title, shareUrl]
   );
+
+  useEffect(() => {
+    void confetti({
+      colors: ["#31f3e9", "#196dff", "#ffd76a", "#ffffff"],
+      disableForReducedMotion: true,
+      origin: { y: 0.68 },
+      particleCount: 120,
+      scalar: 0.9,
+      spread: 78,
+      ticks: 180
+    });
+    window.setTimeout(() => {
+      void confetti({
+        colors: ["#31f3e9", "#ffd76a", "#ffffff"],
+        disableForReducedMotion: true,
+        origin: { y: 0.72 },
+        particleCount: 70,
+        scalar: 0.75,
+        spread: 56,
+        ticks: 150
+      });
+    }, 280);
+  }, []);
 
   useEffect(() => {
     const handleEscape = (event: KeyboardEvent) => {

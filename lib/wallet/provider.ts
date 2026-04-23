@@ -18,7 +18,12 @@ export type Eip1193Provider = {
   on?: (event: string, listener: (...args: unknown[]) => void) => void;
   removeListener?: (event: string, listener: (...args: unknown[]) => void) => void;
   isBase?: boolean;
+  isBraveWallet?: boolean;
   isCoinbaseWallet?: boolean;
+  isFrame?: boolean;
+  isMetaMask?: boolean;
+  isRabby?: boolean;
+  isTrust?: boolean;
   providers?: Eip1193Provider[];
   selectedProvider?: Eip1193Provider;
 };
@@ -31,18 +36,34 @@ export class WalletProviderError extends Error {
 }
 
 export function getInjectedWalletProvider() {
-  if (typeof window === "undefined") return null;
+  const candidates = getInjectedWalletProviders();
+  return candidates[0] ?? null;
+}
+
+export function getInjectedWalletProviders() {
+  if (typeof window === "undefined") return [];
 
   const ethereum = (window as Window & { ethereum?: Eip1193Provider }).ethereum;
-  if (!ethereum) return null;
+  if (!ethereum) return [];
 
-  const candidates = [
-    ...(Array.isArray(ethereum.providers) ? ethereum.providers : []),
+  const candidates = dedupeProviders([
     ethereum.selectedProvider,
+    ...(Array.isArray(ethereum.providers) ? ethereum.providers : []),
     ethereum
-  ].filter((provider): provider is Eip1193Provider => Boolean(provider?.request));
+  ].filter((provider): provider is Eip1193Provider => Boolean(provider?.request)));
 
-  return candidates.find((provider) => provider.isBase || provider.isCoinbaseWallet) ?? candidates[0] ?? null;
+  return candidates;
+}
+
+export async function getConnectedWalletProvider() {
+  const candidates = getInjectedWalletProviders();
+
+  for (const provider of candidates) {
+    const accounts = await getConnectedWalletAccounts(provider).catch(() => []);
+    if (accounts.length) return provider;
+  }
+
+  return candidates[0] ?? null;
 }
 
 export function requireInjectedWalletProvider(provider = getInjectedWalletProvider()) {
@@ -165,6 +186,11 @@ export async function switchWalletToBaseMainnet(provider = requireInjectedWallet
         }
       ]
     });
+
+    await provider.request({
+      method: "wallet_switchEthereumChain",
+      params: [{ chainId }]
+    });
   }
 
   return getWalletChainId(provider);
@@ -213,4 +239,8 @@ function isUnknownChainError(error: unknown) {
 
   const message = "message" in error ? String((error as { message?: unknown }).message).toLowerCase() : "";
   return message.includes("unknown chain") || message.includes("unrecognized chain") || message.includes("not added");
+}
+
+function dedupeProviders(providers: Eip1193Provider[]) {
+  return providers.filter((provider, index) => providers.indexOf(provider) === index);
 }

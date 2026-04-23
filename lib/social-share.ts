@@ -10,8 +10,6 @@ export type ShareData = {
   url: string;
 };
 
-const MOBILE_APP_FALLBACK_DELAY = 900;
-
 function getShareText(intent: ShareIntent, data: ShareData) {
   if (intent === "created") {
     const editionLabel = data.edition ? `${data.edition} edition${data.edition === 1 ? "" : "s"}` : "limited editions";
@@ -29,12 +27,6 @@ function getShareText(intent: ShareIntent, data: ShareData) {
 export function openExternalUrl(url: string) {
   if (typeof window === "undefined") return;
 
-  const popup = window.open(url, "_blank", "noopener,noreferrer");
-  if (popup) {
-    popup.opener = null;
-    return;
-  }
-
   const anchor = document.createElement("a");
   anchor.href = url;
   anchor.target = "_blank";
@@ -42,34 +34,6 @@ export function openExternalUrl(url: string) {
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();
-}
-
-function isLikelyMobileDevice() {
-  if (typeof navigator === "undefined") return false;
-  return /android|iphone|ipad|ipod/i.test(navigator.userAgent);
-}
-
-function openNativeAppUrl(appUrl: string, webUrl: string) {
-  if (typeof window === "undefined") return;
-
-  if (!isLikelyMobileDevice()) {
-    openExternalUrl(webUrl);
-    return;
-  }
-
-  const fallbackTimer = window.setTimeout(() => {
-    openExternalUrl(webUrl);
-  }, MOBILE_APP_FALLBACK_DELAY);
-
-  const clearFallback = () => {
-    window.clearTimeout(fallbackTimer);
-    document.removeEventListener("visibilitychange", clearFallback);
-    window.removeEventListener("pagehide", clearFallback);
-  };
-
-  document.addEventListener("visibilitychange", clearFallback, { once: true });
-  window.addEventListener("pagehide", clearFallback, { once: true });
-  window.location.href = appUrl;
 }
 
 export function getXShareUrl(data: ShareData, intent: ShareIntent) {
@@ -94,20 +58,15 @@ export function getRedditShareUrl(data: ShareData, intent: ShareIntent) {
 }
 
 export function shareOnX(data: ShareData, intent: ShareIntent) {
-  const text = `${getShareText(intent, data)} ${data.url}`.trim();
-  const nativeUrl = `twitter://post?message=${encodeURIComponent(text)}`;
-  openNativeAppUrl(nativeUrl, getXShareUrl(data, intent));
+  openExternalUrl(getXShareUrl(data, intent));
 }
 
 export function shareOnFarcaster(data: ShareData, intent: ShareIntent) {
-  const text = getShareText(intent, data);
-  const nativeUrl = `warpcast://compose?text=${encodeURIComponent(text)}&embeds[]=${encodeURIComponent(data.url)}`;
-  openNativeAppUrl(nativeUrl, getFarcasterShareUrl(data, intent));
+  openExternalUrl(getFarcasterShareUrl(data, intent));
 }
 
 export function shareOnReddit(data: ShareData, intent: ShareIntent) {
-  const nativeUrl = `reddit://submit?url=${encodeURIComponent(data.url)}&title=${encodeURIComponent(getShareText(intent, data))}`;
-  openNativeAppUrl(nativeUrl, getRedditShareUrl(data, intent));
+  openExternalUrl(getRedditShareUrl(data, intent));
 }
 
 export async function shareNative(data: ShareData, intent: ShareIntent) {

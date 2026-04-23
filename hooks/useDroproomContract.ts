@@ -1,6 +1,6 @@
 "use client";
 
-import { startTransition, useEffect, useState } from "react";
+import { startTransition, useEffect, useRef, useState } from "react";
 import type { Address, Hash, TransactionReceipt } from "viem";
 
 import {
@@ -22,6 +22,7 @@ import {
   disconnectWallet,
   ensureWalletOnBaseMainnet,
   getConnectedWalletAccounts,
+  getConnectedWalletProvider,
   getInjectedWalletProvider,
   getWalletChainId,
   parseWalletChainId,
@@ -55,36 +56,78 @@ export function useDroproomContract() {
   const [error, setError] = useState<string | null>(null);
   const [hasProvider, setHasProvider] = useState(false);
   const [tx, setTx] = useState<DroproomTxState>(initialTxState);
+  const providerRef = useRef<Eip1193Provider | null>(null);
 
   useEffect(() => {
-    const provider = getInjectedWalletProvider();
-    setHasProvider(Boolean(provider));
-    if (!provider) return;
+    let activeProvider: Eip1193Provider | null = null;
+    let disposed = false;
+    let refreshTimer: number | undefined;
 
-    void refreshWalletState(provider);
-
-    function handleAccountsChanged(accounts: unknown) {
-      const [nextAccount] = Array.isArray(accounts) ? accounts : [];
-      setAccount(typeof nextAccount === "string" ? (nextAccount as Address) : null);
+    function handleAccountsChanged() {
+      if (activeProvider) void refreshWalletState(activeProvider);
     }
 
     function handleChainChanged(nextChainId: unknown) {
       setChainId(parseWalletChainId(nextChainId));
+      if (activeProvider) void refreshWalletState(activeProvider);
     }
 
-    provider.on?.("accountsChanged", handleAccountsChanged);
-    provider.on?.("chainChanged", handleChainChanged);
+    function detachProvider() {
+      activeProvider?.removeListener?.("accountsChanged", handleAccountsChanged);
+      activeProvider?.removeListener?.("chainChanged", handleChainChanged);
+      activeProvider = null;
+    }
+
+    function attachProvider(provider: Eip1193Provider) {
+      if (activeProvider === provider) return;
+      detachProvider();
+      activeProvider = provider;
+      providerRef.current = provider;
+      provider.on?.("accountsChanged", handleAccountsChanged);
+      provider.on?.("chainChanged", handleChainChanged);
+    }
+
+    async function refreshActiveProvider() {
+      const provider = await getConnectedWalletProvider();
+      if (disposed) return;
+
+      setHasProvider(Boolean(provider));
+      if (!provider) {
+        providerRef.current = null;
+        detachProvider();
+        startTransition(() => {
+          setAccount(null);
+          setChainId(null);
+        });
+        return;
+      }
+
+      attachProvider(provider);
+      void refreshWalletState(provider);
+    }
+
+    function refreshWhenVisible() {
+      if (document.visibilityState === "visible") void refreshActiveProvider();
+    }
+
+    void refreshActiveProvider();
+    window.addEventListener("focus", refreshActiveProvider);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    refreshTimer = window.setInterval(refreshActiveProvider, 3000);
 
     return () => {
-      provider.removeListener?.("accountsChanged", handleAccountsChanged);
-      provider.removeListener?.("chainChanged", handleChainChanged);
+      disposed = true;
+      detachProvider();
+      window.removeEventListener("focus", refreshActiveProvider);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+      if (refreshTimer) window.clearInterval(refreshTimer);
     };
   }, []);
 
   const isConnected = Boolean(account);
   const isCorrectChain = isBaseMainnetChainId(chainId);
 
-  async function refreshWalletState(provider = requireProvider()) {
+  async function refreshWalletState(provider = providerRef.current ?? requireProvider()) {
     const [accounts, walletChainId] = await Promise.all([
       getConnectedWalletAccounts(provider).catch(() => []),
       getWalletChainId(provider).catch(() => null)
@@ -95,10 +138,12 @@ export function useDroproomContract() {
       setChainId(walletChainId);
       setHasProvider(true);
     });
+
+    providerRef.current = provider;
   }
 
   async function connect() {
-    const provider = requireProvider();
+    const provider = requireProvider(providerRef.current ?? getInjectedWalletProvider());
     setError(null);
 
     try {
@@ -120,7 +165,7 @@ export function useDroproomContract() {
   }
 
   async function disconnect() {
-    const provider = getInjectedWalletProvider();
+    const provider = providerRef.current ?? getInjectedWalletProvider();
     await disconnectWallet(provider ?? undefined);
 
     startTransition(() => {
@@ -128,21 +173,26 @@ export function useDroproomContract() {
       setChainId(null);
       setTx(initialTxState);
     });
+    providerRef.current = null;
   }
 
   async function switchAccount() {
-    const provider = requireProvider();
+    const provider = requireProvider(providerRef.current ?? getInjectedWalletProvider());
     setError(null);
 
     try {
-      const nextAccount = await requestWalletAccountSwitch(provider);
-      const nextChainId = await ensureWalletOnBaseMainnet(provider);
+      const requestedAccount = await requestWalletAccountSwitch(provider);
+      const activeProvider = (await getConnectedWalletProvider()) ?? provider;
+      const accounts = await getConnectedWalletAccounts(activeProvider).catch(() => []);
+      const nextAccount = accounts[0] ?? requestedAccount;
+      const nextChainId = await ensureWalletOnBaseMainnet(activeProvider);
 
       startTransition(() => {
         setAccount(nextAccount);
         setChainId(nextChainId);
         setHasProvider(true);
       });
+      providerRef.current = activeProvider;
 
       return nextAccount;
     } catch (nextError) {
@@ -153,15 +203,16 @@ export function useDroproomContract() {
   }
 
   async function ensureBaseChain() {
-    const provider = requireProvider();
+    const provider = providerRef.current ?? requireProvider();
     const nextChainId = await ensureWalletOnBaseMainnet(provider);
     setChainId(nextChainId);
     return nextChainId;
   }
 
   async function getReadyWalletClient() {
-    const provider = requireProvider();
-    const sender = account ?? (await requestWalletAccount(provider));
+    const provider = (await getConnectedWalletProvider()) ?? requireProvider(providerRef.current ?? getInjectedWalletProvider());
+    const connectedAccounts = await getConnectedWalletAccounts(provider).catch(() => []);
+    const sender = connectedAccounts[0] ?? (await requestWalletAccount(provider));
     const nextChainId = await ensureWalletOnBaseMainnet(provider);
 
     startTransition(() => {
@@ -169,6 +220,7 @@ export function useDroproomContract() {
       setChainId(nextChainId);
       setHasProvider(true);
     });
+    providerRef.current = provider;
 
     return {
       account: sender,
@@ -187,14 +239,16 @@ export function useDroproomContract() {
   }
 
   async function signMessage(message: string) {
-    const provider = requireProvider();
-    const signer = account ?? (await requestWalletAccount(provider));
+    const provider = (await getConnectedWalletProvider()) ?? requireProvider(providerRef.current ?? getInjectedWalletProvider());
+    const connectedAccounts = await getConnectedWalletAccounts(provider).catch(() => []);
+    const signer = connectedAccounts[0] ?? (await requestWalletAccount(provider));
     const signature = await signWalletMessage(message, signer, provider);
 
     startTransition(() => {
       setAccount(signer);
       setHasProvider(true);
     });
+    providerRef.current = provider;
 
     return { address: signer, message, signature };
   }
@@ -262,8 +316,7 @@ export function useDroproomContract() {
   };
 }
 
-function requireProvider(): Eip1193Provider {
-  const provider = getInjectedWalletProvider();
+function requireProvider(provider = getInjectedWalletProvider()): Eip1193Provider {
   if (!provider) {
     throw new Error("No wallet provider found. Open Droproom in a wallet-enabled browser.");
   }

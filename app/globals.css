@@ -3305,17 +3305,46 @@ input:focus {
 }
 
 /* =================================
-   LIBRARY ASPECT RATIO FIX
-   Kare yerine 3:4 collectible format
+   FINAL MEDIA + DESKTOP COMPOSITION
+   One canonical collectible frame everywhere.
    ================================= */
 
+.content-grid {
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 420px);
+  align-items: start;
+}
+
+.drop-grid {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr));
+  align-content: start;
+}
+
+.drop-detail {
+  max-height: calc(100svh - 128px);
+  overflow-y: auto;
+}
+
+.drop-detail .detail-art,
+.live-preview-card .preview-art {
+  min-height: clamp(280px, 32vw, 460px);
+}
+
 .library-view .drop-grid.compact .drop-card {
-  aspect-ratio: 3 / 4;
+  aspect-ratio: auto;
+  min-height: auto;
 }
 
 .library-view .drop-grid.compact .drop-card img {
-  aspect-ratio: 3 / 4;
-  object-fit: cover;
+  aspect-ratio: auto;
+  object-fit: contain;
+}
+
+.product-media img,
+.drop-image-wrap img,
+.detail-art img,
+.preview-art img,
+.library-view .drop-grid.compact .drop-card img {
+  padding: clamp(14px, 2.4vw, 22px);
 }
 
 /* Mobile responsive */

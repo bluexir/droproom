@@ -535,6 +535,13 @@ export function DroproomApp() {
 
     try {
       setPublishPending(true);
+      setNotice("Preparing your wallet on Base...");
+      if (!walletAddress) {
+        await droproom.connect();
+      } else {
+        await droproom.ensureBaseChain();
+      }
+
       setNotice("Uploading artwork to IPFS...");
       const title = draft.title.trim() || "Untitled Drop";
       const description = draft.description.trim() || "A limited edition NFT drop created on Droproom.";
@@ -629,10 +636,6 @@ export function DroproomApp() {
 
   async function mintSelectedDrop() {
     if (!selectedDrop) return;
-    if (!walletAddress) {
-      void connectWallet();
-      return;
-    }
     if (!selectedDrop.tokenId) {
       setNotice("This drop is not connected to an onchain token yet.");
       return;
@@ -641,6 +644,7 @@ export function DroproomApp() {
 
     try {
       setMintPending(true);
+      const mintWallet = walletAddress ?? (await droproom.connect());
       setNotice("Confirm the mint in your wallet. Free mint means price is 0; Base gas is still paid by you.");
       const result = await droproom.mintDrop({ tokenId: selectedDrop.tokenId, quantity: 1 });
       const mintedEvent = result.events.minted[0];
@@ -649,16 +653,16 @@ export function DroproomApp() {
       const minted = mintedEvent ? Number(mintedEvent.totalMinted) : Math.min(selectedDrop.minted + 1, selectedDrop.edition);
       const updatedDrop: Drop = {
         ...selectedDrop,
-        collectors: selectedDrop.collectors.includes(walletAddress)
+        collectors: selectedDrop.collectors.includes(mintWallet)
           ? selectedDrop.collectors
-          : [...selectedDrop.collectors, walletAddress],
+          : [...selectedDrop.collectors, mintWallet],
         minted,
         status: minted >= selectedDrop.edition ? "sold-out" : selectedDrop.status
       };
 
       setDrops((current) => current.map((drop) => (drop.id === selectedDrop.id ? updatedDrop : drop)));
       setLibraryByWallet((current) => {
-        const key = walletAddress.toLowerCase();
+        const key = mintWallet.toLowerCase();
         const existing = current[key] ?? [];
         return {
           ...current,
@@ -674,7 +678,7 @@ export function DroproomApp() {
       try {
         await saveMint({
           basescan_url: result.basescanUrl,
-          collector_address: walletAddress,
+          collector_address: mintWallet,
           paid_wei: paidWei,
           quantity: 1,
           token_id: selectedDrop.tokenId,
@@ -757,15 +761,15 @@ export function DroproomApp() {
             onClick={() => (walletAddress ? setWalletMenuOpen((current) => !current) : void connectWallet())}
             type="button"
           >
-            <span>{walletLoading ? "..." : droproom.isCorrectChain || !walletAddress ? "Base" : "Switch to Base"}</span>
-            <strong>{walletAddress ? shortAddress(walletAddress) : "Connect"}</strong>
+            <span>{walletLoading ? "..." : !droproom.isCorrectChain && walletAddress ? "Switch to Base" : "Wallet"}</span>
+            <strong>{walletAddress ? shortAddress(walletAddress) : "Connect wallet"}</strong>
           </button>
           {walletAddress && walletMenuOpen ? (
             <div className="wallet-dropdown">
-              <span>Connected Base Account</span>
+              <span>Connected wallet</span>
               <strong>{shortAddress(walletAddress)}</strong>
               <button onClick={copyWalletAddress} type="button">Copy address</button>
-              <button onClick={() => void switchWalletAccount()} type="button">Switch account</button>
+              <button onClick={() => void switchWalletAccount()} type="button">Change account</button>
               {!droproom.isCorrectChain ? <button onClick={() => void droproom.ensureBaseChain()} type="button">Switch to Base</button> : null}
               <a href={`https://basescan.org/address/${walletAddress}`} rel="noreferrer" target="_blank">View on Basescan</a>
               <button className="danger-link" onClick={() => void disconnectWallet()} type="button">Disconnect</button>
@@ -808,7 +812,7 @@ export function DroproomApp() {
               onShareX={() => shareCreatedDrop(publishedDrop, "x")}
             />
           ) : null}
-          <Hero featuredDrop={selectedDrop} onCreate={() => setActiveView("create")} />
+          <Hero onCreate={() => setActiveView("create")} />
           <section className="content-grid">
             <div className="drop-grid">
               {dropsLoading ? (
@@ -851,6 +855,7 @@ export function DroproomApp() {
             onBegin={beginCreate}
             onGenerate={generateWithAi}
             onPublish={publishDrop}
+            publishPending={publishPending}
             onSelectAi={selectAiImage}
             onStartMode={setStartMode}
             onStep={setCreateStep}
@@ -908,12 +913,7 @@ function BackgroundGlow() {
   );
 }
 
-function Hero({ featuredDrop, onCreate }: { featuredDrop?: Drop; onCreate: () => void }) {
-  const progress = featuredDrop ? Math.min((featuredDrop.minted / featuredDrop.edition) * 100, 100) : 0;
-  const heroStatus = featuredDrop
-    ? `${featuredDrop.minted}/${featuredDrop.edition} collected on Base`
-    : "Real drops appear here after onchain publish.";
-
+function Hero({ onCreate }: { onCreate: () => void }) {
   return (
     <section className="hero hero-premium">
       <div className="hero-copy">
@@ -931,24 +931,18 @@ function Hero({ featuredDrop, onCreate }: { featuredDrop?: Drop; onCreate: () =>
         </div>
       </div>
       <div className="hero-art hero-media-shell">
-        <div className={featuredDrop ? "hero-product-card live" : "hero-product-card"} aria-hidden="true">
+        <div className="hero-product-card" aria-hidden="true">
           <div className="product-media">
-            {featuredDrop ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img alt="" src={featuredDrop.image} />
-            ) : (
-              <Image alt="" className="hero-variant-image" height={720} priority src={heroFallbackImage} width={720} />
-            )}
+            <Image alt="" className="hero-variant-image" height={720} priority src={heroFallbackImage} width={720} />
           </div>
           <div className="product-copy">
-            <span>{featuredDrop ? "Featured live drop" : "Live media drops"}</span>
-            <strong>{featuredDrop?.title ?? "Publish image or 1s GIF editions"}</strong>
-            {featuredDrop ? <div className="product-progress"><i style={{ width: `${progress}%` }} /></div> : null}
-            <small>{heroStatus}</small>
+            <span>Live media drops</span>
+            <strong>Publish image or 1s GIF editions</strong>
+            <small>Real drops appear below after onchain publish.</small>
             <div className="product-badges">
               <span>Base mainnet</span>
               <span>IPFS media</span>
-              <span>{featuredDrop?.status ?? "Ready"}</span>
+              <span>Ready</span>
             </div>
           </div>
         </div>
@@ -993,7 +987,7 @@ function DropCard({ drop, isSelected, onClick }: { drop: Drop; isSelected: boole
       <div className="drop-image-wrap">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img alt={drop.title} src={drop.image} />
-        {soldOut ? <span className="sold-out">Sold out</span> : <span className="live-dot">Live</span>}
+        {isSelected ? <span className="live-dot">Selected</span> : soldOut ? <span className="sold-out">Sold out</span> : <span className="live-dot">Live</span>}
       </div>
       <div className="drop-card-copy">
         <h3>{drop.title}</h3>
@@ -1203,6 +1197,7 @@ function CreateFlow(props: {
   onUpdateDraft: (draft: StudioDraft | ((current: StudioDraft) => StudioDraft)) => void;
   onUpload: (file?: File) => void;
   hasArtwork: boolean;
+  publishPending: boolean;
   startMode: StartMode;
   step: CreateStep;
   styleChip: StyleChipId;
@@ -1225,7 +1220,14 @@ function CreateFlow(props: {
   }
 
   if (props.step === "review") {
-    return <ReviewStep draft={props.draft} onBack={() => props.onStep("studio")} onPublish={props.onPublish} />;
+    return (
+      <ReviewStep
+        draft={props.draft}
+        onBack={() => props.onStep("studio")}
+        onPublish={props.onPublish}
+        publishPending={props.publishPending}
+      />
+    );
   }
 
   return (
@@ -1402,7 +1404,17 @@ function LivePreview({ draft }: { draft: StudioDraft }) {
   );
 }
 
-function ReviewStep({ draft, onBack, onPublish }: { draft: StudioDraft; onBack: () => void; onPublish: () => void }) {
+function ReviewStep({
+  draft,
+  onBack,
+  onPublish,
+  publishPending
+}: {
+  draft: StudioDraft;
+  onBack: () => void;
+  onPublish: () => void;
+  publishPending: boolean;
+}) {
   return (
     <section className="review-grid">
       <LivePreview draft={draft} />
@@ -1428,11 +1440,11 @@ function ReviewStep({ draft, onBack, onPublish }: { draft: StudioDraft; onBack: 
           </li>
         </ul>
         <div className="review-actions">
-          <button className="secondary-button" onClick={onBack} type="button">
+          <button className="secondary-button" disabled={publishPending} onClick={onBack} type="button">
             Back to studio
           </button>
-          <button className="primary-button" onClick={onPublish} type="button">
-            Publish on Base <span>Live</span>
+          <button className="primary-button" disabled={publishPending} onClick={onPublish} type="button">
+            {publishPending ? "Publishing..." : "Publish on Base"} <span>{publishPending ? "Wait" : "Live"}</span>
           </button>
         </div>
         <p className="microcopy">Publishing uploads the asset to IPFS, creates metadata, then asks your wallet to create the drop on Base. You pay network gas.</p>
