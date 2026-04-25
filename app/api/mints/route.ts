@@ -3,6 +3,7 @@ import type { Address } from "viem";
 
 import { readDropBalance, readDroproomSummary } from "@/lib/contract";
 import { getBasescanTxUrl } from "@/lib/contract/links";
+import { isVisibleDropId } from "@/lib/hidden-drops";
 import { verifyDropMintedTx } from "@/lib/server/chain-events";
 import { supabaseRest } from "@/lib/server/supabase-rest";
 
@@ -37,9 +38,10 @@ export async function GET(request: Request) {
       console.error("Mint index fetch failed", error);
     }
 
+    const visibleRows = rows.filter((row) => isVisibleDropId(row.token_id));
     const discoveredRows = await discoverWalletMints(wallet as Address);
-    const seenTokenIds = new Set(rows.map((row) => row.token_id));
-    const mergedRows = [...rows, ...discoveredRows.filter((row) => !seenTokenIds.has(row.token_id))];
+    const seenTokenIds = new Set(visibleRows.map((row) => row.token_id));
+    const mergedRows = [...visibleRows, ...discoveredRows.filter((row) => !seenTokenIds.has(row.token_id))];
 
     return NextResponse.json({ mints: mergedRows });
   } catch (error) {
@@ -98,7 +100,7 @@ async function discoverWalletMints(wallet: Address): Promise<MintRow[]> {
     const latestTokenId = Number(summary.nextTokenId) - 1;
     if (latestTokenId < 1) return [];
 
-    const tokenIds = Array.from({ length: latestTokenId }, (_, index) => String(latestTokenId - index));
+    const tokenIds = Array.from({ length: latestTokenId }, (_, index) => String(latestTokenId - index)).filter(isVisibleDropId);
     const balances = await Promise.all(
       tokenIds.map(async (tokenId) => {
         try {

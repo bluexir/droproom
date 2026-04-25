@@ -112,12 +112,31 @@ export function useDroproomContract() {
     }
 
     async function refreshActiveProvider() {
-      const provider = await getConnectedWalletProvider({ exclude: isLocallyDisconnectedProvider });
       const options = getWalletProviderOptions();
       if (disposed) return;
 
       setWalletProviderOptions(options);
       setHasProvider(options.length > 0);
+
+      const currentProvider = providerRef.current;
+      if (currentProvider) {
+        const accounts = await getConnectedWalletAccounts(currentProvider).catch(() => []);
+
+        if (disposed) return;
+
+        if (accounts.length) {
+          attachProvider(currentProvider);
+          void refreshWalletState(currentProvider);
+          return;
+        }
+
+        detachProvider();
+        providerRef.current = null;
+      }
+
+      const provider = await getConnectedWalletProvider({ exclude: isLocallyDisconnectedProvider });
+      if (disposed) return;
+
       if (!provider) {
         providerRef.current = null;
         detachProvider();
@@ -184,7 +203,6 @@ export function useDroproomContract() {
       const nextAccount = await requestWalletAccount(provider);
       const options = getWalletProviderOptions();
       const connectedChainId = await getWalletChainId(provider).catch(() => null);
-      disconnectedProvidersRef.current = new WeakSet();
 
       startTransition(() => {
         setAccount(nextAccount);
@@ -227,21 +245,19 @@ export function useDroproomContract() {
 
     try {
       const requestedAccount = await requestWalletAccountSwitch(provider);
-      const activeProvider = (await getConnectedWalletProvider()) ?? provider;
-      const accounts = await getConnectedWalletAccounts(activeProvider).catch(() => []);
+      const accounts = await getConnectedWalletAccounts(provider).catch(() => []);
       const nextAccount = accounts[0] ?? requestedAccount;
-      const nextChainId = await ensureWalletOnBaseMainnet(activeProvider);
+      const nextChainId = await ensureWalletOnBaseMainnet(provider);
       const options = getWalletProviderOptions();
-      disconnectedProvidersRef.current = new WeakSet();
 
       startTransition(() => {
         setAccount(nextAccount);
         setChainId(nextChainId);
         setHasProvider(true);
-        setWalletProvider(findWalletProviderOption(activeProvider, options));
+        setWalletProvider(findWalletProviderOption(provider, options));
         setWalletProviderOptions(options);
       });
-      providerRef.current = activeProvider;
+      providerRef.current = provider;
 
       return nextAccount;
     } catch (nextError) {
@@ -259,7 +275,7 @@ export function useDroproomContract() {
   }
 
   async function getReadyWalletClient() {
-    const provider = (await getConnectedWalletProvider()) ?? requireProvider(providerRef.current ?? getInjectedWalletProvider());
+    const provider = providerRef.current ?? (await getConnectedWalletProvider()) ?? requireProvider(getInjectedWalletProvider());
     const connectedAccounts = await getConnectedWalletAccounts(provider).catch(() => []);
     const sender = connectedAccounts[0] ?? (await requestWalletAccount(provider));
     const nextChainId = await ensureWalletOnBaseMainnet(provider);
@@ -291,7 +307,7 @@ export function useDroproomContract() {
   }
 
   async function signMessage(message: string) {
-    const provider = (await getConnectedWalletProvider()) ?? requireProvider(providerRef.current ?? getInjectedWalletProvider());
+    const provider = providerRef.current ?? (await getConnectedWalletProvider()) ?? requireProvider(getInjectedWalletProvider());
     const connectedAccounts = await getConnectedWalletAccounts(provider).catch(() => []);
     const signer = connectedAccounts[0] ?? (await requestWalletAccount(provider));
     const signature = await signWalletMessage(message, signer, provider);

@@ -3,8 +3,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 const updatedAt = "April 16, 2026";
-const supportEmail =
-  process.env.NEXT_PUBLIC_SUPPORT_EMAIL ?? "support@droproom.app";
+const supportEmail = "supportdroproom@gmail.com";
 
 const pageShell: CSSProperties = {
   width: "min(920px, calc(100% - 32px))",

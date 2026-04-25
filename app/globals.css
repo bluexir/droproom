@@ -191,15 +191,31 @@ img {
   border: 1px solid var(--line);
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.04);
+  place-items: center;
+  padding: 0;
 }
 
 .mobile-menu-button span {
   display: block;
   width: 18px;
   height: 2px;
-  margin: 4px auto;
   border-radius: 999px;
   background: white;
+  transition:
+    opacity 180ms ease,
+    transform 180ms ease;
+}
+
+.mobile-menu-button.active span:first-child {
+  transform: translateY(6px) rotate(45deg);
+}
+
+.mobile-menu-button.active span:nth-child(2) {
+  opacity: 0;
+}
+
+.mobile-menu-button.active span:last-child {
+  transform: translateY(-6px) rotate(-45deg);
 }
 
 .mobile-menu-panel {
@@ -566,6 +582,16 @@ img {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+.hero-visual-art .artwork-backdrop {
+  opacity: 0.62;
+  object-fit: cover;
+}
+
+.hero-visual-art .artwork-main {
+  object-fit: contain;
+  padding: 12px;
 }
 
 .hero-visual-art::after,
@@ -1857,7 +1883,8 @@ small {
   }
 
   .mobile-menu-button {
-    display: block;
+    display: grid;
+    gap: 4px;
   }
 
   .mobile-menu-panel {

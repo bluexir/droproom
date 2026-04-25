@@ -115,7 +115,7 @@ export async function getConnectedWalletProvider(options: { exclude?: (provider:
     if (accounts.length) return option.provider;
   }
 
-  return candidates[0]?.provider ?? null;
+  return null;
 }
 
 export function requireInjectedWalletProvider(provider = getInjectedWalletProvider()) {

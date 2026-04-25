@@ -2,8 +2,7 @@ import type { CSSProperties } from "react";
 import type { Metadata } from "next";
 import Link from "next/link";
 
-const supportEmail =
-  process.env.NEXT_PUBLIC_SUPPORT_EMAIL ?? "support@droproom.app";
+const supportEmail = "supportdroproom@gmail.com";
 
 const pageShell: CSSProperties = {
   width: "min(920px, calc(100% - 32px))",

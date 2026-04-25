@@ -3,6 +3,7 @@ import { formatEther } from "viem";
 
 import { readDrop } from "@/lib/contract";
 import { getBasescanTxUrl } from "@/lib/contract/links";
+import { isHiddenDropId, isVisibleDropId } from "@/lib/hidden-drops";
 import { ipfsUriToGatewayUrl } from "@/lib/ipfs";
 import { verifyDropCreatedTx } from "@/lib/server/chain-events";
 import { supabaseRest } from "@/lib/server/supabase-rest";
@@ -64,7 +65,8 @@ function toDrop(row: DropRow): Drop {
 }
 
 export async function GET(request: Request) {
-  const requestedDropId = new URL(request.url).searchParams.get("drop")?.trim() ?? "";
+  const requestedParam = new URL(request.url).searchParams.get("drop")?.trim() ?? "";
+  const requestedDropId = isHiddenDropId(requestedParam) ? "" : requestedParam;
 
   try {
     let rows: DropRow[] = [];
@@ -76,7 +78,8 @@ export async function GET(request: Request) {
       console.error("Recent drop fetch failed", error);
     }
 
-    const syncedRows = await Promise.all(rows.map(syncRowWithChain));
+    const visibleRows = rows.filter((row) => isVisibleDropId(row.token_id));
+    const syncedRows = await Promise.all(visibleRows.map(syncRowWithChain));
     const requestedDbRow = requestedDropId
       ? await readRequestedDropRow(requestedDropId, syncedRows)
       : null;
@@ -113,6 +116,8 @@ async function syncRowWithChain(row: DropRow): Promise<DropRow> {
 }
 
 async function readRequestedDropRow(tokenId: string, recentRows: DropRow[]) {
+  if (isHiddenDropId(tokenId)) return null;
+
   const existing = recentRows.find((row) => row.token_id === tokenId);
   if (existing) return existing;
 
@@ -212,6 +217,8 @@ function readMetadataAttribute(metadata: NftMetadata, traitName: string) {
 }
 
 async function buildChainFallbackDrop(tokenId: string): Promise<Drop | null> {
+  if (isHiddenDropId(tokenId)) return null;
+
   try {
     const onchain = await readDrop(tokenId);
     if (!onchain.metadataURI) return null;

@@ -1,7 +1,7 @@
 ﻿"use client";
 
 import Image from "next/image";
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode, type TouchEvent } from "react";
 import { parseEther } from "viem";
 
 import { MintSuccessModal } from "@/components/MintSuccessModal";
@@ -19,6 +19,7 @@ import {
 import { useDroproomContract } from "@/hooks/useDroproomContract";
 import { dataUrlToFile, uploadFileToPinata, uploadJsonToPinata } from "@/lib/client/pinata-upload";
 import { getCreatorTokenEligibility } from "@/lib/eligibility";
+import { isVisibleDropId } from "@/lib/hidden-drops";
 import { copyToClipboard, shareOnFarcaster, shareOnReddit, shareOnX, type ShareData } from "@/lib/social-share";
 import type { Drop, StartMode, StudioDraft } from "@/lib/types";
 import type { WalletProviderOption } from "@/lib/wallet/provider";
@@ -169,6 +170,7 @@ export function DroproomApp() {
   const [walletLoading, setWalletLoading] = useState(false);
   const [walletMenuOpen, setWalletMenuOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [viewHistory, setViewHistory] = useState<View[]>([]);
   const [publishPending, setPublishPending] = useState(false);
   const [publishedDropId, setPublishedDropId] = useState<string | null>(null);
   const [mintPending, setMintPending] = useState(false);
@@ -178,6 +180,7 @@ export function DroproomApp() {
     shareUrl: string;
   } | null>(null);
   const [dropsLoading, setDropsLoading] = useState(true);
+  const swipeStartRef = useRef<{ x: number; y: number } | null>(null);
   const hasArtwork = Boolean(draft.image);
   const walletAddress = droproom.account ?? "";
 
@@ -209,17 +212,75 @@ export function DroproomApp() {
     .sort((left, right) => right.minted / Math.max(right.edition, 1) - left.minted / Math.max(left.edition, 1))
     .slice(0, 4);
 
-  function setActiveView(nextView: View) {
+  function setActiveView(nextView: View, options: { replace?: boolean } = {}) {
+    if (nextView !== view && !options.replace) {
+      setViewHistory((current) => [...current, view].slice(-8));
+    }
     setView(nextView);
     setWalletMenuOpen(false);
     setMobileMenuOpen(false);
     if (nextView === "create") setCreateStep("start");
   }
 
-  function scrollToLandingSection(sectionId: string) {
-    setView("explore");
+  function goBackInApp() {
+    if (mobileMenuOpen) {
+      setMobileMenuOpen(false);
+      return;
+    }
+
+    if (walletMenuOpen) {
+      setWalletMenuOpen(false);
+      return;
+    }
+
+    if (view === "explore") {
+      const url = new URL(window.location.href);
+      if (url.searchParams.has("drop")) {
+        url.searchParams.delete("drop");
+        window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+        setSelectedDropId(drops[0]?.id ?? null);
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      }
+      return;
+    }
+
+    const previousView = viewHistory[viewHistory.length - 1] ?? "explore";
+    setView(previousView);
+    setViewHistory((current) => current.slice(0, -1));
     setWalletMenuOpen(false);
     setMobileMenuOpen(false);
+  }
+
+  function isSwipeTargetIgnored(target: EventTarget | null) {
+    return target instanceof Element && Boolean(target.closest("input, textarea, select, [contenteditable='true']"));
+  }
+
+  function handleTouchStart(event: TouchEvent<HTMLElement>) {
+    if (event.touches.length !== 1 || isSwipeTargetIgnored(event.target)) {
+      swipeStartRef.current = null;
+      return;
+    }
+
+    const touch = event.touches[0];
+    swipeStartRef.current = { x: touch.clientX, y: touch.clientY };
+  }
+
+  function handleTouchEnd(event: TouchEvent<HTMLElement>) {
+    const start = swipeStartRef.current;
+    swipeStartRef.current = null;
+    if (!start || event.changedTouches.length !== 1) return;
+
+    const touch = event.changedTouches[0];
+    const dx = touch.clientX - start.x;
+    const dy = touch.clientY - start.y;
+
+    if (dx > 76 && Math.abs(dx) > Math.abs(dy) * 1.45) {
+      goBackInApp();
+    }
+  }
+
+  function scrollToLandingSection(sectionId: string) {
+    setActiveView("explore");
     window.setTimeout(() => {
       document.getElementById(sectionId)?.scrollIntoView({ behavior: "smooth", block: "start" });
     }, 0);
@@ -232,7 +293,7 @@ export function DroproomApp() {
       const endpoint = requestedDropId ? `/api/drops?drop=${encodeURIComponent(requestedDropId)}` : "/api/drops";
       const response = await fetch(endpoint, { cache: "no-store" });
       const payload = (await response.json()) as { drops?: Drop[]; error?: string };
-      const nextDrops = payload.drops ?? [];
+      const nextDrops = (payload.drops ?? []).filter((drop) => isVisibleDropId(drop.tokenId ?? drop.id));
       const requestedDrop = requestedDropId ? nextDrops.find((drop) => drop.id === requestedDropId || drop.tokenId === requestedDropId) : null;
       setDrops(nextDrops);
       setSelectedDropId((current) => {
@@ -318,7 +379,7 @@ export function DroproomApp() {
     try {
       const response = await fetch(`/api/mints?wallet=${encodeURIComponent(address.toLowerCase())}`, { cache: "no-store" });
       const payload = (await response.json()) as { mints?: Array<{ token_id: string }> };
-      const tokenIds = payload.mints?.map((mint) => mint.token_id) ?? [];
+      const tokenIds = payload.mints?.map((mint) => mint.token_id).filter(isVisibleDropId) ?? [];
       setLibraryByWallet((current) => ({
         ...current,
         [address.toLowerCase()]: tokenIds
@@ -350,9 +411,14 @@ export function DroproomApp() {
   async function switchWalletAccount() {
     try {
       setWalletLoading(true);
+      const previousWallet = walletAddress;
       const nextWallet = await droproom.switchAccount();
       setWalletMenuOpen(false);
-      setNotice(`Base account switched: ${shortAddress(nextWallet)}`);
+      setNotice(
+        previousWallet && previousWallet.toLowerCase() === nextWallet.toLowerCase()
+          ? `Wallet kept the same account: ${shortAddress(nextWallet)}. Choose another account in the wallet popup and retry.`
+          : `Base account switched: ${shortAddress(nextWallet)}`
+      );
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Base account switch was not completed.");
     } finally {
@@ -711,7 +777,7 @@ export function DroproomApp() {
   }
 
   return (
-    <main className="app-shell marketplace-shell">
+    <main className="app-shell marketplace-shell" onTouchEnd={handleTouchEnd} onTouchStart={handleTouchStart}>
       <MarketplaceNav
         isCorrectChain={droproom.isCorrectChain}
         mobileMenuOpen={mobileMenuOpen}
@@ -955,7 +1021,14 @@ function MarketplaceNav({
             walletProviderName={walletProviderName}
             walletProviderOptions={walletProviderOptions}
           />
-          <button aria-expanded={mobileMenuOpen} aria-label="Open menu" className="mobile-menu-button" onClick={onToggleMobileMenu} type="button">
+          <button
+            aria-expanded={mobileMenuOpen}
+            aria-label={mobileMenuOpen ? "Close menu" : "Open menu"}
+            className={mobileMenuOpen ? "mobile-menu-button active" : "mobile-menu-button"}
+            onClick={onToggleMobileMenu}
+            type="button"
+          >
+            <span />
             <span />
             <span />
           </button>
@@ -1129,8 +1202,8 @@ function MarketplaceHero({
 
 function HeroDropStack({ drops, dropsLoading }: { drops: Drop[]; dropsLoading: boolean }) {
   const frontDrop = drops[0];
-  const leftDrop = drops[1];
-  const rightDrop = drops[2];
+  const leftDrop = drops.length ? drops[1 % drops.length] : undefined;
+  const rightDrop = drops.length ? drops[2 % drops.length] : undefined;
 
   return (
     <div className="hero-card-stage" aria-label="Featured live drops">
@@ -1149,7 +1222,11 @@ function HeroVisualCard({ drop, loading, position }: { drop?: Drop; loading: boo
   return (
     <article className={`hero-visual-card ${position}${!drop ? " is-empty" : ""}`}>
       <div className="hero-visual-art">
-        <div className="hero-visual-gradient" aria-label={drop ? `${drop.title} preview` : loading ? "Loading live drops" : "Drop preview"} />
+        {drop?.image ? (
+          <ArtworkMedia alt={`${drop.title} preview`} src={drop.image} />
+        ) : (
+          <div className="hero-visual-gradient" aria-label={loading ? "Loading live drops" : "Drop preview"} />
+        )}
         {drop ? (
           <div className="hero-visual-title">
             <small>#{drop.tokenId ?? drop.id}</small>
