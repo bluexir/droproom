@@ -171,10 +171,30 @@ export async function requestWalletAccount(provider = requireInjectedWalletProvi
   return getAddress(accounts[0]);
 }
 
-export async function requestWalletAccountSwitch(provider = requireInjectedWalletProvider()) {
-  await provider
+export async function requestWalletAccountSwitch(provider = requireInjectedWalletProvider(), currentAccount?: Address | null) {
+  const previousAccount =
+    currentAccount ??
+    (await getConnectedWalletAccounts(provider)
+      .then((accounts) => accounts[0] ?? null)
+      .catch(() => null));
+  const permissions = await provider
     .request({
       method: "wallet_requestPermissions",
+      params: [{ eth_accounts: {} }]
+    })
+    .catch(() => null);
+
+  const permittedAccount = getAccountsFromPermissions(permissions)[0];
+  const requestedAccount = permittedAccount ?? (await requestWalletAccount(provider));
+  const nextAccount = await waitForChangedWalletAccount(provider, requestedAccount, previousAccount);
+
+  if (!previousAccount || nextAccount.toLowerCase() !== previousAccount.toLowerCase()) {
+    return nextAccount;
+  }
+
+  await provider
+    .request({
+      method: "wallet_revokePermissions",
       params: [{ eth_accounts: {} }]
     })
     .catch(() => null);
@@ -191,6 +211,60 @@ export async function disconnectWallet(provider = getInjectedWalletProvider()) {
       params: [{ eth_accounts: {} }]
     })
     .catch(() => null);
+}
+
+async function waitForChangedWalletAccount(
+  provider: Eip1193Provider,
+  requestedAccount: Address,
+  previousAccount: Address | null
+) {
+  if (!previousAccount || requestedAccount.toLowerCase() !== previousAccount.toLowerCase()) {
+    return requestedAccount;
+  }
+
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    await new Promise((resolve) => window.setTimeout(resolve, 120));
+    const accounts = await getConnectedWalletAccounts(provider).catch(() => []);
+    const account = accounts[0];
+
+    if (account && account.toLowerCase() !== previousAccount.toLowerCase()) {
+      return account;
+    }
+  }
+
+  return requestedAccount;
+}
+
+function getAccountsFromPermissions(value: unknown) {
+  if (!Array.isArray(value)) return [];
+
+  return value.flatMap((permission) => {
+    if (!permission || typeof permission !== "object") return [];
+
+    const parentCapability = "parentCapability" in permission ? permission.parentCapability : undefined;
+    if (parentCapability !== "eth_accounts") return [];
+
+    const caveats = "caveats" in permission ? permission.caveats : undefined;
+    if (!Array.isArray(caveats)) return [];
+
+    return caveats.flatMap((caveat) => {
+      if (!caveat || typeof caveat !== "object") return [];
+
+      const type = "type" in caveat ? caveat.type : undefined;
+      const accounts = "value" in caveat ? caveat.value : undefined;
+      if (type !== "restrictReturnedAccounts" || !Array.isArray(accounts)) return [];
+
+      return accounts.flatMap((account) => {
+        if (typeof account !== "string") return [];
+
+        try {
+          return [getAddress(account)];
+        } catch {
+          return [];
+        }
+      });
+    });
+  });
 }
 
 export async function signWalletMessage(message: string, account?: Address, provider = requireInjectedWalletProvider()) {

@@ -244,7 +244,7 @@ export function useDroproomContract() {
     setError(null);
 
     try {
-      const requestedAccount = await requestWalletAccountSwitch(provider);
+      const requestedAccount = await requestWalletAccountSwitch(provider, account);
       const accounts = await getConnectedWalletAccounts(provider).catch(() => []);
       const nextAccount = accounts[0] ?? requestedAccount;
       const nextChainId = await ensureWalletOnBaseMainnet(provider);
