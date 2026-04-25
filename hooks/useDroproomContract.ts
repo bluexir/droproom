@@ -24,12 +24,14 @@ import {
   getConnectedWalletAccounts,
   getConnectedWalletProvider,
   getInjectedWalletProvider,
+  getWalletProviderOptions,
   getWalletChainId,
   parseWalletChainId,
   requestWalletAccountSwitch,
   requestWalletAccount,
   signWalletMessage,
-  type Eip1193Provider
+  type Eip1193Provider,
+  type WalletProviderOption
 } from "@/lib/wallet/provider";
 
 export type DroproomTxState = {
@@ -56,6 +58,9 @@ export function useDroproomContract() {
   const [error, setError] = useState<string | null>(null);
   const [hasProvider, setHasProvider] = useState(false);
   const [tx, setTx] = useState<DroproomTxState>(initialTxState);
+  const [walletProvider, setWalletProvider] = useState<WalletProviderOption | null>(null);
+  const [walletProviderOptions, setWalletProviderOptions] = useState<WalletProviderOption[]>([]);
+  const disconnectedProvidersRef = useRef<WeakSet<Eip1193Provider>>(new WeakSet());
   const providerRef = useRef<Eip1193Provider | null>(null);
 
   useEffect(() => {
@@ -63,7 +68,14 @@ export function useDroproomContract() {
     let disposed = false;
     let refreshTimer: number | undefined;
 
-    function handleAccountsChanged() {
+    function handleAccountsChanged(nextAccounts?: unknown) {
+      if (Array.isArray(nextAccounts) && nextAccounts.length === 0) {
+        startTransition(() => {
+          setAccount(null);
+          setTx(initialTxState);
+        });
+      }
+
       if (activeProvider) void refreshWalletState(activeProvider);
     }
 
@@ -72,9 +84,20 @@ export function useDroproomContract() {
       if (activeProvider) void refreshWalletState(activeProvider);
     }
 
+    function handleDisconnect() {
+      startTransition(() => {
+        setAccount(null);
+        setChainId(null);
+        setTx(initialTxState);
+        setWalletProvider(null);
+      });
+      providerRef.current = null;
+    }
+
     function detachProvider() {
       activeProvider?.removeListener?.("accountsChanged", handleAccountsChanged);
       activeProvider?.removeListener?.("chainChanged", handleChainChanged);
+      activeProvider?.removeListener?.("disconnect", handleDisconnect);
       activeProvider = null;
     }
 
@@ -85,19 +108,23 @@ export function useDroproomContract() {
       providerRef.current = provider;
       provider.on?.("accountsChanged", handleAccountsChanged);
       provider.on?.("chainChanged", handleChainChanged);
+      provider.on?.("disconnect", handleDisconnect);
     }
 
     async function refreshActiveProvider() {
-      const provider = await getConnectedWalletProvider();
+      const provider = await getConnectedWalletProvider({ exclude: isLocallyDisconnectedProvider });
+      const options = getWalletProviderOptions();
       if (disposed) return;
 
-      setHasProvider(Boolean(provider));
+      setWalletProviderOptions(options);
+      setHasProvider(options.length > 0);
       if (!provider) {
         providerRef.current = null;
         detachProvider();
         startTransition(() => {
           setAccount(null);
           setChainId(null);
+          setWalletProvider(null);
         });
         return;
       }
@@ -124,10 +151,15 @@ export function useDroproomContract() {
     };
   }, []);
 
+  function isLocallyDisconnectedProvider(provider: Eip1193Provider) {
+    return disconnectedProvidersRef.current.has(provider);
+  }
+
   const isConnected = Boolean(account);
   const isCorrectChain = isBaseMainnetChainId(chainId);
 
   async function refreshWalletState(provider = providerRef.current ?? requireProvider()) {
+    const options = getWalletProviderOptions();
     const [accounts, walletChainId] = await Promise.all([
       getConnectedWalletAccounts(provider).catch(() => []),
       getWalletChainId(provider).catch(() => null)
@@ -137,24 +169,34 @@ export function useDroproomContract() {
       setAccount(accounts[0] ?? null);
       setChainId(walletChainId);
       setHasProvider(true);
+      setWalletProvider(findWalletProviderOption(provider, options));
+      setWalletProviderOptions(options);
     });
 
     providerRef.current = provider;
   }
 
-  async function connect() {
-    const provider = requireProvider(providerRef.current ?? getInjectedWalletProvider());
+  async function connect(providerOption?: Eip1193Provider | WalletProviderOption) {
+    const provider = requireProvider(resolveWalletProvider(providerOption) ?? providerRef.current ?? getInjectedWalletProvider());
     setError(null);
 
     try {
       const nextAccount = await requestWalletAccount(provider);
-      const nextChainId = await ensureWalletOnBaseMainnet(provider);
+      const options = getWalletProviderOptions();
+      const connectedChainId = await getWalletChainId(provider).catch(() => null);
+      disconnectedProvidersRef.current = new WeakSet();
 
       startTransition(() => {
         setAccount(nextAccount);
-        setChainId(nextChainId);
+        setChainId(connectedChainId);
         setHasProvider(true);
+        setWalletProvider(findWalletProviderOption(provider, options));
+        setWalletProviderOptions(options);
       });
+      providerRef.current = provider;
+
+      const nextChainId = connectedChainId === DROPROOM_CHAIN_ID ? connectedChainId : await ensureWalletOnBaseMainnet(provider);
+      setChainId(nextChainId);
 
       return nextAccount;
     } catch (nextError) {
@@ -166,12 +208,15 @@ export function useDroproomContract() {
 
   async function disconnect() {
     const provider = providerRef.current ?? getInjectedWalletProvider();
+    if (provider) disconnectedProvidersRef.current.add(provider);
+
     await disconnectWallet(provider ?? undefined);
 
     startTransition(() => {
       setAccount(null);
       setChainId(null);
       setTx(initialTxState);
+      setWalletProvider(null);
     });
     providerRef.current = null;
   }
@@ -186,11 +231,15 @@ export function useDroproomContract() {
       const accounts = await getConnectedWalletAccounts(activeProvider).catch(() => []);
       const nextAccount = accounts[0] ?? requestedAccount;
       const nextChainId = await ensureWalletOnBaseMainnet(activeProvider);
+      const options = getWalletProviderOptions();
+      disconnectedProvidersRef.current = new WeakSet();
 
       startTransition(() => {
         setAccount(nextAccount);
         setChainId(nextChainId);
         setHasProvider(true);
+        setWalletProvider(findWalletProviderOption(activeProvider, options));
+        setWalletProviderOptions(options);
       });
       providerRef.current = activeProvider;
 
@@ -214,11 +263,14 @@ export function useDroproomContract() {
     const connectedAccounts = await getConnectedWalletAccounts(provider).catch(() => []);
     const sender = connectedAccounts[0] ?? (await requestWalletAccount(provider));
     const nextChainId = await ensureWalletOnBaseMainnet(provider);
+    const options = getWalletProviderOptions();
 
     startTransition(() => {
       setAccount(sender);
       setChainId(nextChainId);
       setHasProvider(true);
+      setWalletProvider(findWalletProviderOption(provider, options));
+      setWalletProviderOptions(options);
     });
     providerRef.current = provider;
 
@@ -243,10 +295,13 @@ export function useDroproomContract() {
     const connectedAccounts = await getConnectedWalletAccounts(provider).catch(() => []);
     const signer = connectedAccounts[0] ?? (await requestWalletAccount(provider));
     const signature = await signWalletMessage(message, signer, provider);
+    const options = getWalletProviderOptions();
 
     startTransition(() => {
       setAccount(signer);
       setHasProvider(true);
+      setWalletProvider(findWalletProviderOption(provider, options));
+      setWalletProviderOptions(options);
     });
     providerRef.current = provider;
 
@@ -312,7 +367,9 @@ export function useDroproomContract() {
     resetTx,
     signMessage,
     switchAccount,
-    tx
+    tx,
+    walletProvider,
+    walletProviderOptions
   };
 }
 
@@ -327,4 +384,15 @@ function requireProvider(provider = getInjectedWalletProvider()): Eip1193Provide
 function formatError(error: unknown) {
   if (error instanceof Error && error.message) return error.message;
   return "Droproom wallet transaction failed.";
+}
+
+function resolveWalletProvider(providerOption: Eip1193Provider | WalletProviderOption | null | undefined) {
+  if (!providerOption) return null;
+  if ("provider" in providerOption) return providerOption.provider;
+
+  return providerOption as Eip1193Provider;
+}
+
+function findWalletProviderOption(provider: Eip1193Provider, options = getWalletProviderOptions()) {
+  return options.find((option) => option.provider === provider) ?? null;
 }

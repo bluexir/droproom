@@ -28,6 +28,40 @@ export type Eip1193Provider = {
   selectedProvider?: Eip1193Provider;
 };
 
+export type Eip6963ProviderInfo = {
+  icon?: string;
+  name?: string;
+  rdns?: string;
+  uuid?: string;
+};
+
+export type WalletProviderKind = "base" | "coinbase" | "metamask" | "injected";
+
+export type WalletProviderOption = {
+  icon: string | null;
+  id: string;
+  isPreferred: boolean;
+  kind: WalletProviderKind;
+  name: string;
+  provider: Eip1193Provider;
+  rdns: string | null;
+};
+
+type Eip6963ProviderDetail = {
+  info?: Eip6963ProviderInfo;
+  provider?: Eip1193Provider;
+};
+
+type WalletProviderCandidate = WalletProviderOption & {
+  priority: number;
+  sourceIndex: number;
+};
+
+const announcedProviders = new Map<string, Eip6963ProviderDetail>();
+const fallbackProviderIds = new WeakMap<Eip1193Provider, string>();
+let hasRequestedProviderAnnouncements = false;
+let nextFallbackProviderId = 1;
+
 export class WalletProviderError extends Error {
   constructor(message: string) {
     super(message);
@@ -36,34 +70,52 @@ export class WalletProviderError extends Error {
 }
 
 export function getInjectedWalletProvider() {
-  const candidates = getInjectedWalletProviders();
-  return candidates[0] ?? null;
+  return getWalletProviderOptions()[0]?.provider ?? null;
 }
 
 export function getInjectedWalletProviders() {
-  if (typeof window === "undefined") return [];
-
-  const ethereum = (window as Window & { ethereum?: Eip1193Provider }).ethereum;
-  if (!ethereum) return [];
-
-  const candidates = dedupeProviders([
-    ethereum.selectedProvider,
-    ...(Array.isArray(ethereum.providers) ? ethereum.providers : []),
-    ethereum
-  ].filter((provider): provider is Eip1193Provider => Boolean(provider?.request)));
-
-  return candidates;
+  return getWalletProviderOptions().map((option) => option.provider);
 }
 
-export async function getConnectedWalletProvider() {
-  const candidates = getInjectedWalletProviders();
+export function getWalletProviderOptions(): WalletProviderOption[] {
+  if (typeof window === "undefined") return [];
 
-  for (const provider of candidates) {
-    const accounts = await getConnectedWalletAccounts(provider).catch(() => []);
-    if (accounts.length) return provider;
+  requestEip6963ProviderAnnouncements();
+
+  const ethereum = (window as Window & { ethereum?: Eip1193Provider }).ethereum;
+  const candidates: WalletProviderCandidate[] = [];
+  let sourceIndex = 0;
+
+  for (const detail of announcedProviders.values()) {
+    if (isEip1193Provider(detail.provider)) {
+      candidates.push(createWalletProviderCandidate(detail.provider, detail.info, sourceIndex++));
+    }
   }
 
-  return candidates[0] ?? null;
+  if (isEip1193Provider(ethereum)) {
+    for (const provider of [
+      ethereum.selectedProvider,
+      ...(Array.isArray(ethereum.providers) ? ethereum.providers : []),
+      ethereum
+    ]) {
+      if (isEip1193Provider(provider)) {
+        candidates.push(createWalletProviderCandidate(provider, undefined, sourceIndex++));
+      }
+    }
+  }
+
+  return sortWalletProviderOptions(dedupeWalletProviderOptions(candidates));
+}
+
+export async function getConnectedWalletProvider(options: { exclude?: (provider: Eip1193Provider) => boolean } = {}) {
+  const candidates = getWalletProviderOptions().filter((option) => !options.exclude?.(option.provider));
+
+  for (const option of candidates) {
+    const accounts = await getConnectedWalletAccounts(option.provider).catch(() => []);
+    if (accounts.length) return option.provider;
+  }
+
+  return candidates[0]?.provider ?? null;
 }
 
 export function requireInjectedWalletProvider(provider = getInjectedWalletProvider()) {
@@ -241,6 +293,157 @@ function isUnknownChainError(error: unknown) {
   return message.includes("unknown chain") || message.includes("unrecognized chain") || message.includes("not added");
 }
 
-function dedupeProviders(providers: Eip1193Provider[]) {
-  return providers.filter((provider, index) => providers.indexOf(provider) === index);
+function requestEip6963ProviderAnnouncements() {
+  if (typeof window === "undefined") return;
+
+  if (!hasRequestedProviderAnnouncements) {
+    hasRequestedProviderAnnouncements = true;
+
+    window.addEventListener("eip6963:announceProvider", ((event: Event) => {
+      const detail = (event as CustomEvent<Eip6963ProviderDetail>).detail;
+      if (!isEip1193Provider(detail?.provider)) return;
+
+      const key = getNormalizedString(detail.info?.uuid) ?? getFallbackProviderId(detail.provider);
+      announcedProviders.set(key, detail);
+    }) as EventListener);
+  }
+
+  window.dispatchEvent(new Event("eip6963:requestProvider"));
+}
+
+function createWalletProviderCandidate(
+  provider: Eip1193Provider,
+  info: Eip6963ProviderInfo | undefined,
+  sourceIndex: number
+): WalletProviderCandidate {
+  const kind = getWalletProviderKind(provider, info);
+  const priority = getWalletProviderPriority(kind);
+
+  return {
+    icon: getNormalizedString(info?.icon) ?? null,
+    id: getWalletProviderId(provider, info, kind),
+    isPreferred: kind === "base" || kind === "coinbase",
+    kind,
+    name: getWalletProviderName(provider, info, kind),
+    priority,
+    provider,
+    rdns: getNormalizedString(info?.rdns) ?? null,
+    sourceIndex
+  };
+}
+
+function getWalletProviderKind(provider: Eip1193Provider, info: Eip6963ProviderInfo | undefined): WalletProviderKind {
+  const name = getNormalizedString(info?.name)?.toLowerCase() ?? "";
+  const rdns = getNormalizedString(info?.rdns)?.toLowerCase() ?? "";
+
+  if (provider.isBase || name.includes("base wallet") || name.includes("base account") || isKnownBaseRdns(rdns)) {
+    return "base";
+  }
+  if (provider.isCoinbaseWallet || name.includes("coinbase") || rdns.includes("coinbase")) return "coinbase";
+  if ((provider.isMetaMask && !provider.isBraveWallet) || name.includes("metamask") || rdns.includes("metamask")) {
+    return "metamask";
+  }
+
+  return "injected";
+}
+
+function getWalletProviderPriority(kind: WalletProviderKind) {
+  if (kind === "base") return 10;
+  if (kind === "coinbase") return 20;
+  if (kind === "metamask") return 30;
+  return 100;
+}
+
+function getWalletProviderName(
+  provider: Eip1193Provider,
+  info: Eip6963ProviderInfo | undefined,
+  kind: WalletProviderKind
+) {
+  const name = getNormalizedString(info?.name);
+  if (name) return name;
+
+  if (kind === "base") return "Base Wallet";
+  if (kind === "coinbase") return "Coinbase Wallet";
+  if (kind === "metamask") return "MetaMask";
+  if (provider.isBraveWallet) return "Brave Wallet";
+  if (provider.isRabby) return "Rabby Wallet";
+  if (provider.isTrust) return "Trust Wallet";
+  if (provider.isFrame) return "Frame";
+
+  return "Injected Wallet";
+}
+
+function getWalletProviderId(
+  provider: Eip1193Provider,
+  info: Eip6963ProviderInfo | undefined,
+  kind: WalletProviderKind
+) {
+  const uuid = getNormalizedString(info?.uuid);
+  if (uuid) return `eip6963:${uuid}`;
+
+  return `${kind}:${getFallbackProviderId(provider)}`;
+}
+
+function getFallbackProviderId(provider: Eip1193Provider) {
+  const existingId = fallbackProviderIds.get(provider);
+  if (existingId) return existingId;
+
+  const nextId = String(nextFallbackProviderId++);
+  fallbackProviderIds.set(provider, nextId);
+  return nextId;
+}
+
+function dedupeWalletProviderOptions(candidates: WalletProviderCandidate[]) {
+  const byProvider = new Map<Eip1193Provider, WalletProviderCandidate>();
+
+  for (const candidate of candidates) {
+    const existing = byProvider.get(candidate.provider);
+    if (!existing || shouldReplaceWalletProviderCandidate(existing, candidate)) {
+      byProvider.set(candidate.provider, candidate);
+    }
+  }
+
+  return [...byProvider.values()];
+}
+
+function shouldReplaceWalletProviderCandidate(existing: WalletProviderCandidate, candidate: WalletProviderCandidate) {
+  if (candidate.priority !== existing.priority) return candidate.priority < existing.priority;
+  if (getProviderMetadataScore(candidate) !== getProviderMetadataScore(existing)) {
+    return getProviderMetadataScore(candidate) > getProviderMetadataScore(existing);
+  }
+
+  return candidate.sourceIndex < existing.sourceIndex;
+}
+
+function getProviderMetadataScore(option: WalletProviderOption) {
+  return Number(Boolean(option.rdns)) + Number(Boolean(option.icon)) + Number(option.name !== "Injected Wallet");
+}
+
+function sortWalletProviderOptions(candidates: WalletProviderCandidate[]): WalletProviderOption[] {
+  return [...candidates]
+    .sort((left, right) => left.priority - right.priority || left.sourceIndex - right.sourceIndex || left.name.localeCompare(right.name))
+    .map((candidate) => ({
+      icon: candidate.icon,
+      id: candidate.id,
+      isPreferred: candidate.isPreferred,
+      kind: candidate.kind,
+      name: candidate.name,
+      provider: candidate.provider,
+      rdns: candidate.rdns
+    }));
+}
+
+function getNormalizedString(value: unknown) {
+  if (typeof value !== "string") return null;
+
+  const trimmed = value.trim();
+  return trimmed || null;
+}
+
+function isEip1193Provider(value: unknown): value is Eip1193Provider {
+  return Boolean(value && typeof value === "object" && typeof (value as { request?: unknown }).request === "function");
+}
+
+function isKnownBaseRdns(rdns: string) {
+  return rdns === "org.base" || rdns === "com.base" || rdns === "com.base.wallet" || rdns.endsWith(".base.org");
 }

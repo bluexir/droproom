@@ -18,10 +18,29 @@ function getShareText(intent: ShareIntent, data: ShareData) {
 
   if (intent === "minted") {
     const scarcity = typeof data.remaining === "number" ? (data.remaining > 0 ? ` Only ${data.remaining} left.` : " It is now sold out.") : "";
-    return `I just collected "${data.title}" on Droproom.${scarcity}`;
+    return `I just successfully minted "${data.title}" on Droproom.${scarcity}`;
   }
 
   return `Collect "${data.title}" on Droproom${data.creator ? ` by ${data.creator}` : ""}.`;
+}
+
+function getNativeSharePayload(data: ShareData, intent: ShareIntent) {
+  return {
+    text: getShareText(intent, data),
+    title: data.title,
+    url: data.url
+  };
+}
+
+export function canUseNativeShare(data?: ShareData, intent: ShareIntent = "collect") {
+  if (typeof navigator === "undefined" || !navigator.share) return false;
+  if (!data || typeof navigator.canShare !== "function") return true;
+
+  try {
+    return navigator.canShare(getNativeSharePayload(data, intent));
+  } catch {
+    return true;
+  }
 }
 
 export function openExternalUrl(url: string) {
@@ -70,14 +89,10 @@ export function shareOnReddit(data: ShareData, intent: ShareIntent) {
 }
 
 export async function shareNative(data: ShareData, intent: ShareIntent) {
-  if (!navigator.share) return false;
+  if (!canUseNativeShare(data, intent)) return false;
 
   try {
-    await navigator.share({
-      text: getShareText(intent, data),
-      title: data.title,
-      url: data.url
-    });
+    await navigator.share(getNativeSharePayload(data, intent));
     return true;
   } catch {
     return false;
@@ -85,10 +100,19 @@ export async function shareNative(data: ShareData, intent: ShareIntent) {
 }
 
 export async function copyToClipboard(text: string) {
+  if (typeof navigator === "undefined" || typeof document === "undefined") return false;
+
   try {
-    await navigator.clipboard.writeText(text);
-    return true;
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
   } catch {
+    // Fall through to the textarea copy path for browsers without Clipboard API
+    // access, including some embedded mobile webviews.
+  }
+
+  try {
     const textArea = document.createElement("textarea");
     textArea.value = text;
     textArea.style.position = "fixed";
@@ -104,5 +128,7 @@ export async function copyToClipboard(text: string) {
       textArea.remove();
       return false;
     }
+  } catch {
+    return false;
   }
 }

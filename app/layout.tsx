@@ -8,7 +8,8 @@ const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "https://baseappdroproom.com";
 const baseAppId = process.env.NEXT_PUBLIC_BASE_APP_ID ?? "69db83cb2c63bda0567316af";
 const appDescription =
   "Create limited social NFT drops with upload, blank canvas, and AI-assisted creation on Base. No sponsored gas: users pay their own network gas.";
-const ogImage = "/brand/droproom-premium-hero.png";
+const brandIcon = "/brand/logo.png";
+const ogImage = "/brand/og.png";
 
 export const metadata: Metadata = {
   metadataBase: new URL(appUrl),
@@ -27,7 +28,20 @@ export const metadata: Metadata = {
     "limited editions"
   ],
   icons: {
-    icon: "/brand/droproom-premium-hero.png"
+    icon: [
+      {
+        url: brandIcon,
+        sizes: "1254x1254",
+        type: "image/png"
+      }
+    ],
+    apple: [
+      {
+        url: brandIcon,
+        sizes: "1254x1254",
+        type: "image/png"
+      }
+    ]
   },
   openGraph: {
     type: "website",
@@ -38,6 +52,8 @@ export const metadata: Metadata = {
     images: [
       {
         url: ogImage,
+        width: 1731,
+        height: 909,
         alt: "Droproom limited NFT drops on Base"
       }
     ]

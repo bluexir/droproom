@@ -1,7 +1,7 @@
 ﻿"use client";
 
 import Image from "next/image";
-import { useCallback, useEffect, useState, type ReactNode, type TouchEvent } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { parseEther } from "viem";
 
 import { MintSuccessModal } from "@/components/MintSuccessModal";
@@ -21,6 +21,7 @@ import { dataUrlToFile, uploadFileToPinata, uploadJsonToPinata } from "@/lib/cli
 import { getCreatorTokenEligibility } from "@/lib/eligibility";
 import { copyToClipboard, shareOnFarcaster, shareOnReddit, shareOnX, type ShareData } from "@/lib/social-share";
 import type { Drop, StartMode, StudioDraft } from "@/lib/types";
+import type { WalletProviderOption } from "@/lib/wallet/provider";
 
 type View = "explore" | "create" | "dashboard" | "library";
 type CreateStep = "start" | "studio" | "review";
@@ -42,9 +43,7 @@ type BaseNotificationAdminResult = {
 type BaseNotificationAdminRequester = (input: BaseNotificationAdminInput) => Promise<BaseNotificationAdminResult>;
 
 const libraryKey = "droproom:library:v1";
-const brandIconPrimary = "/brand/droproom-logo-main.png";
-const heroFallbackImage = "/brand/droproom-premium-hero.png";
-const viewOrder: View[] = ["explore", "create", "dashboard", "library"];
+const brandIconPrimary = "/brand/logo.png";
 
 const defaultDraft: StudioDraft = {
   title: "Untitled Drop",
@@ -128,14 +127,6 @@ function getDropPermalink(dropId?: string) {
   return url.toString();
 }
 
-function isInteractiveTarget(target: EventTarget | null) {
-  if (!(target instanceof Element)) return false;
-
-  return Boolean(
-    target.closest("button, a, input, textarea, select, label, [role='button'], [data-swipe-lock='true']")
-  );
-}
-
 function safeStorageSet(key: string, value: unknown) {
   try {
     window.localStorage.setItem(key, JSON.stringify(value));
@@ -177,7 +168,7 @@ export function DroproomApp() {
   const [notice, setNotice] = useState("");
   const [walletLoading, setWalletLoading] = useState(false);
   const [walletMenuOpen, setWalletMenuOpen] = useState(false);
-  const [touchStart, setTouchStart] = useState<{ target: EventTarget | null; x: number; y: number } | null>(null);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [publishPending, setPublishPending] = useState(false);
   const [publishedDropId, setPublishedDropId] = useState<string | null>(null);
   const [mintPending, setMintPending] = useState(false);
@@ -211,11 +202,27 @@ export function DroproomApp() {
   const soldOutCount = creatorDrops.filter((drop) => drop.status === "sold-out" && drop.edition >= TOKEN_UNLOCK_MIN_EDITION).length;
   const tokenEligibility = getCreatorTokenEligibility(drops, walletAddress);
   const isPlatformAdmin = walletAddress.toLowerCase() === PLATFORM_WALLET.toLowerCase();
+  const liveDrops = drops.filter((drop) => drop.tokenId && drop.minted < drop.edition);
+  const featuredDrops = (liveDrops.length ? liveDrops : drops).slice(0, 3);
+  const collectionDrops = [...drops]
+    .filter((drop) => drop.tokenId)
+    .sort((left, right) => right.minted / Math.max(right.edition, 1) - left.minted / Math.max(left.edition, 1))
+    .slice(0, 4);
 
   function setActiveView(nextView: View) {
     setView(nextView);
     setWalletMenuOpen(false);
+    setMobileMenuOpen(false);
     if (nextView === "create") setCreateStep("start");
+  }
+
+  function scrollToLandingSection(sectionId: string) {
+    setView("explore");
+    setWalletMenuOpen(false);
+    setMobileMenuOpen(false);
+    window.setTimeout(() => {
+      document.getElementById(sectionId)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 0);
   }
 
   async function loadDrops() {
@@ -327,10 +334,11 @@ export function DroproomApp() {
     void loadMintLibrary(walletAddress);
   }, [loadMintLibrary, walletAddress]);
 
-  async function connectWallet() {
+  async function connectWallet(providerOption?: WalletProviderOption) {
     try {
       setWalletLoading(true);
-      const nextWallet = await droproom.connect();
+      const nextWallet = await droproom.connect(providerOption);
+      setWalletMenuOpen(false);
       setNotice(`Connected on Base: ${shortAddress(nextWallet)}`);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Wallet connection was not completed.");
@@ -405,38 +413,6 @@ export function DroproomApp() {
     }
 
     shareOnReddit(shareData, "created");
-  }
-
-  function handleTouchStart(event: TouchEvent<HTMLElement>) {
-    if (isInteractiveTarget(event.target)) return;
-
-    const touch = event.touches[0];
-    if (!touch) return;
-    setTouchStart({ target: event.target, x: touch.clientX, y: touch.clientY });
-  }
-
-  function handleTouchEnd(event: TouchEvent<HTMLElement>) {
-    if (!touchStart || isInteractiveTarget(touchStart.target)) {
-      setTouchStart(null);
-      return;
-    }
-
-    const touch = event.changedTouches[0];
-    if (!touch) {
-      setTouchStart(null);
-      return;
-    }
-
-    const dx = touch.clientX - touchStart.x;
-    const dy = touch.clientY - touchStart.y;
-    setTouchStart(null);
-
-    if (Math.abs(dx) < 72 || Math.abs(dx) < Math.abs(dy) * 1.35) return;
-
-    const currentIndex = viewOrder.indexOf(view);
-    const nextIndex = dx < 0 ? Math.min(currentIndex + 1, viewOrder.length - 1) : Math.max(currentIndex - 1, 0);
-    const nextView = viewOrder[nextIndex];
-    if (nextView && nextView !== view) setActiveView(nextView);
   }
 
   function beginCreate(mode: StartMode) {
@@ -634,39 +610,40 @@ export function DroproomApp() {
     }
   }
 
-  async function mintSelectedDrop() {
-    if (!selectedDrop) return;
-    if (!selectedDrop.tokenId) {
+  async function mintSelectedDrop(targetDrop = selectedDrop) {
+    if (!targetDrop) return;
+    selectDrop(targetDrop.id);
+    if (!targetDrop.tokenId) {
       setNotice("This drop is not connected to an onchain token yet.");
       return;
     }
-    if (mintPending || selectedDrop.minted >= selectedDrop.edition || activeLibrary.includes(selectedDrop.id)) return;
+    if (mintPending || targetDrop.minted >= targetDrop.edition || activeLibrary.includes(targetDrop.id)) return;
 
     try {
       setMintPending(true);
       const mintWallet = walletAddress ?? (await droproom.connect());
       setNotice("Confirm the mint in your wallet. Free mint means price is 0; Base gas is still paid by you.");
-      const result = await droproom.mintDrop({ tokenId: selectedDrop.tokenId, quantity: 1 });
+      const result = await droproom.mintDrop({ tokenId: targetDrop.tokenId, quantity: 1 });
       const mintedEvent = result.events.minted[0];
-      const paidWei = mintedEvent?.paid?.toString() ?? selectedDrop.priceWei ?? "0";
+      const paidWei = mintedEvent?.paid?.toString() ?? targetDrop.priceWei ?? "0";
 
-      const minted = mintedEvent ? Number(mintedEvent.totalMinted) : Math.min(selectedDrop.minted + 1, selectedDrop.edition);
+      const minted = mintedEvent ? Number(mintedEvent.totalMinted) : Math.min(targetDrop.minted + 1, targetDrop.edition);
       const updatedDrop: Drop = {
-        ...selectedDrop,
-        collectors: selectedDrop.collectors.includes(mintWallet)
-          ? selectedDrop.collectors
-          : [...selectedDrop.collectors, mintWallet],
+        ...targetDrop,
+        collectors: targetDrop.collectors.includes(mintWallet)
+          ? targetDrop.collectors
+          : [...targetDrop.collectors, mintWallet],
         minted,
-        status: minted >= selectedDrop.edition ? "sold-out" : selectedDrop.status
+        status: minted >= targetDrop.edition ? "sold-out" : targetDrop.status
       };
 
-      setDrops((current) => current.map((drop) => (drop.id === selectedDrop.id ? updatedDrop : drop)));
+      setDrops((current) => current.map((drop) => (drop.id === targetDrop.id ? updatedDrop : drop)));
       setLibraryByWallet((current) => {
         const key = mintWallet.toLowerCase();
         const existing = current[key] ?? [];
         return {
           ...current,
-          [key]: [selectedDrop.id, ...existing.filter((id) => id !== selectedDrop.id)]
+          [key]: [targetDrop.id, ...existing.filter((id) => id !== targetDrop.id)]
         };
       });
       setMintSuccessData({
@@ -674,14 +651,14 @@ export function DroproomApp() {
         mintNumber: minted,
         shareUrl: getDropPermalink(updatedDrop.id)
       });
-      setNotice(`Collected on Base. ${updatedDrop.title} is now in your library.`);
+      setNotice(`Successfully minted on Base. ${updatedDrop.title} is now in your library.`);
       try {
         await saveMint({
           basescan_url: result.basescanUrl,
           collector_address: mintWallet,
           paid_wei: paidWei,
           quantity: 1,
-          token_id: selectedDrop.tokenId,
+          token_id: targetDrop.tokenId,
           tx_hash: result.hash
         });
       } catch (indexError) {
@@ -734,55 +711,34 @@ export function DroproomApp() {
   }
 
   return (
-    <main className="app-shell" onTouchEnd={handleTouchEnd} onTouchStart={handleTouchStart}>
-      <BackgroundGlow />
-      <header className="topbar">
-        <button className="brand-lockup" onClick={() => setActiveView("explore")} type="button">
-          <Image alt="Droproom icon" height={56} priority src={brandIconPrimary} width={56} />
-          <span>DROPROOM</span>
-        </button>
-        <nav className="nav-pills" aria-label="Primary navigation">
-          {viewOrder.map((item) => (
-            <button
-              className={view === item ? "nav-pill active" : "nav-pill"}
-              key={item}
-              onClick={() => setActiveView(item)}
-              type="button"
-            >
-              {item}
-            </button>
-          ))}
-        </nav>
-        <div className="wallet-menu">
-          <button
-            aria-expanded={walletMenuOpen}
-            className={walletAddress ? "wallet-button connected" : "wallet-button"}
-            disabled={walletLoading}
-            onClick={() => (walletAddress ? setWalletMenuOpen((current) => !current) : void connectWallet())}
-            type="button"
-          >
-            <span>{walletLoading ? "..." : !droproom.isCorrectChain && walletAddress ? "Switch to Base" : "Wallet"}</span>
-            <strong>{walletAddress ? shortAddress(walletAddress) : "Connect wallet"}</strong>
-          </button>
-          {walletAddress && walletMenuOpen ? (
-            <div className="wallet-dropdown">
-              <span>Connected wallet</span>
-              <strong>{shortAddress(walletAddress)}</strong>
-              <button onClick={copyWalletAddress} type="button">Copy address</button>
-              <button onClick={() => void switchWalletAccount()} type="button">Change account</button>
-              {!droproom.isCorrectChain ? <button onClick={() => void droproom.ensureBaseChain()} type="button">Switch to Base</button> : null}
-              <a href={`https://basescan.org/address/${walletAddress}`} rel="noreferrer" target="_blank">View on Basescan</a>
-              <button className="danger-link" onClick={() => void disconnectWallet()} type="button">Disconnect</button>
-            </div>
-          ) : null}
-        </div>
-      </header>
-
-      <BaseReadyStrip />
-      <ViewRail activeView={view} onSelect={setActiveView} />
+    <main className="app-shell marketplace-shell">
+      <MarketplaceNav
+        isCorrectChain={droproom.isCorrectChain}
+        mobileMenuOpen={mobileMenuOpen}
+        onCloseMobileMenu={() => setMobileMenuOpen(false)}
+        onConnectWallet={connectWallet}
+        onCopyWalletAddress={copyWalletAddress}
+        onDashboard={() => setActiveView("dashboard")}
+        onDisconnectWallet={disconnectWallet}
+        onLibrary={() => setActiveView("library")}
+        onOpenCreate={() => setActiveView("create")}
+        onOpenLanding={() => setActiveView("explore")}
+        onScrollCollections={() => scrollToLandingSection("collections")}
+        onScrollCreate={() => scrollToLandingSection("create")}
+        onScrollDrops={() => scrollToLandingSection("drops")}
+        onSwitchAccount={switchWalletAccount}
+        onSwitchBase={() => void droproom.ensureBaseChain()}
+        onToggleMobileMenu={() => setMobileMenuOpen((current) => !current)}
+        onToggleWalletMenu={() => setWalletMenuOpen((current) => !current)}
+        walletAddress={walletAddress}
+        walletLoading={walletLoading}
+        walletMenuOpen={walletMenuOpen}
+        walletProviderName={droproom.walletProvider?.name}
+        walletProviderOptions={droproom.walletProviderOptions}
+      />
 
       {notice ? (
-        <div className={`notice enter ${/indexed|collected|generated|uploaded/i.test(notice) ? "success" : ""}`}>
+        <div className={`notice ${/indexed|minted|generated|uploaded|connected/i.test(notice) ? "success" : ""}`}>
           {notice}
         </div>
       ) : null}
@@ -801,31 +757,43 @@ export function DroproomApp() {
       ) : null}
 
       {view === "explore" ? (
-        <section className="screen enter">
+        <>
           {publishedDrop ? (
-            <PublishSuccessPanel
-              drop={publishedDrop}
-              onCopyLink={() => void copyDropLink(publishedDrop, "Creator link copied.")}
-              onDismiss={() => setPublishedDropId(null)}
-              onShareFarcaster={() => shareCreatedDrop(publishedDrop, "farcaster")}
-              onShareReddit={() => shareCreatedDrop(publishedDrop, "reddit")}
-              onShareX={() => shareCreatedDrop(publishedDrop, "x")}
-            />
+            <section className="section-wrap publish-wrap">
+              <PublishSuccessPanel
+                drop={publishedDrop}
+                onCopyLink={() => void copyDropLink(publishedDrop, "Creator link copied.")}
+                onDismiss={() => setPublishedDropId(null)}
+                onShareFarcaster={() => shareCreatedDrop(publishedDrop, "farcaster")}
+                onShareReddit={() => shareCreatedDrop(publishedDrop, "reddit")}
+                onShareX={() => shareCreatedDrop(publishedDrop, "x")}
+              />
+            </section>
           ) : null}
-          <Hero onCreate={() => setActiveView("create")} />
-          <section className="content-grid">
-            <div className="drop-grid">
-              {dropsLoading ? (
-                <div className="empty-state">Loading live Base drops...</div>
-            ) : drops.length ? (
-                drops.map((drop) => (
-                  <DropCard drop={drop} isSelected={drop.id === selectedDrop?.id} key={drop.id} onClick={() => selectDrop(drop.id)} />
-                ))
-              ) : (
-                <GenesisEmptyState onCreate={() => setView("create")} />
-              )}
-            </div>
-            {selectedDrop ? (
+
+          <MarketplaceHero
+            drops={featuredDrops}
+            dropsLoading={dropsLoading}
+            onCreate={() => setActiveView("create")}
+            onExplore={() => scrollToLandingSection("drops")}
+          />
+
+          <LiveDropsSection
+            activeLibrary={activeLibrary}
+            drops={drops}
+            dropsLoading={dropsLoading}
+            isMinting={mintPending}
+            onCreate={() => setActiveView("create")}
+            onMint={(drop) => void mintSelectedDrop(drop)}
+            onSelect={(id) => {
+              selectDrop(id);
+              document.getElementById("drop-detail")?.scrollIntoView({ behavior: "smooth", block: "start" });
+            }}
+            selectedDropId={selectedDrop?.id ?? null}
+          />
+
+          {selectedDrop ? (
+            <section className="section-wrap detail-section" id="drop-detail">
               <DropDetail
                 canShare={isSelectedDropCreator}
                 drop={selectedDrop}
@@ -833,19 +801,23 @@ export function DroproomApp() {
                 isOwned={activeLibrary.includes(selectedDrop.id)}
                 isWalletConnected={Boolean(walletAddress)}
                 onCopyLink={() => void copyDropLink(selectedDrop, "Creator link copied.")}
-                onMint={mintSelectedDrop}
+                onMint={() => void mintSelectedDrop(selectedDrop)}
                 onShareFarcaster={() => shareCreatedDrop(selectedDrop, "farcaster")}
                 onShareReddit={() => shareCreatedDrop(selectedDrop, "reddit")}
                 onShareX={() => shareCreatedDrop(selectedDrop, "x")}
               />
-            ) : null}
-          </section>
+            </section>
+          ) : null}
+
+          <CreateCta onCreate={() => setActiveView("create")} onDashboard={() => setActiveView("dashboard")} />
+          <CollectionsSection drops={collectionDrops} onSelect={selectDrop} />
           {soldOutDrops.length ? <SoldOutShowcase drops={soldOutDrops} onSelect={selectDrop} /> : null}
-        </section>
+          <MarketplaceFooter />
+        </>
       ) : null}
 
       {view === "create" ? (
-        <section className="screen create-screen enter">
+        <section className="screen create-screen page-view">
           <CreateFlow
             aiImages={aiImages}
             aiLoading={aiLoading}
@@ -871,7 +843,7 @@ export function DroproomApp() {
       ) : null}
 
       {view === "dashboard" ? (
-        <section className="screen dashboard enter">
+        <section className="screen dashboard page-view">
           <Dashboard
             drops={creatorDrops}
             eligibilityReason={tokenEligibility.reason}
@@ -889,7 +861,7 @@ export function DroproomApp() {
       ) : null}
 
       {view === "library" ? (
-        <section className="screen library-screen enter">
+        <section className="screen library-screen page-view">
           <LibraryView
             drops={drops.filter((drop) => activeLibrary.includes(drop.id))}
             onOpenDrop={(id) => {
@@ -903,47 +875,457 @@ export function DroproomApp() {
   );
 }
 
-function BackgroundGlow() {
+function MarketplaceNav({
+  isCorrectChain,
+  mobileMenuOpen,
+  onCloseMobileMenu,
+  onConnectWallet,
+  onCopyWalletAddress,
+  onDashboard,
+  onDisconnectWallet,
+  onLibrary,
+  onOpenCreate,
+  onOpenLanding,
+  onScrollCollections,
+  onScrollCreate,
+  onScrollDrops,
+  onSwitchAccount,
+  onSwitchBase,
+  onToggleMobileMenu,
+  onToggleWalletMenu,
+  walletAddress,
+  walletLoading,
+  walletMenuOpen,
+  walletProviderName,
+  walletProviderOptions
+}: {
+  isCorrectChain: boolean;
+  mobileMenuOpen: boolean;
+  onCloseMobileMenu: () => void;
+  onConnectWallet: (providerOption?: WalletProviderOption) => Promise<void>;
+  onCopyWalletAddress: () => Promise<void>;
+  onDashboard: () => void;
+  onDisconnectWallet: () => Promise<void>;
+  onLibrary: () => void;
+  onOpenCreate: () => void;
+  onOpenLanding: () => void;
+  onScrollCollections: () => void;
+  onScrollCreate: () => void;
+  onScrollDrops: () => void;
+  onSwitchAccount: () => Promise<void>;
+  onSwitchBase: () => void;
+  onToggleMobileMenu: () => void;
+  onToggleWalletMenu: () => void;
+  walletAddress: string;
+  walletLoading: boolean;
+  walletMenuOpen: boolean;
+  walletProviderName?: string;
+  walletProviderOptions: WalletProviderOption[];
+}) {
   return (
-    <div className="background-glow" aria-hidden="true">
-      <div />
-      <div />
-      <div />
+    <header className="market-nav">
+      <div className="market-nav-inner">
+        <button className="market-brand" onClick={onOpenLanding} type="button">
+          <span className="market-brand-icon">
+            <Image alt="Droproom icon" height={56} priority src={brandIconPrimary} width={56} />
+          </span>
+          <span>Droproom</span>
+        </button>
+
+        <nav className="market-links" aria-label="Marketplace navigation">
+          <button onClick={onScrollDrops} type="button">Drops</button>
+          <button onClick={onScrollCollections} type="button">Collections</button>
+          <button onClick={onScrollCreate} type="button">Create</button>
+        </nav>
+
+        <div className="market-actions">
+          <WalletMenu
+            isCorrectChain={isCorrectChain}
+            onConnectWallet={onConnectWallet}
+            onCopyWalletAddress={onCopyWalletAddress}
+            onDashboard={onDashboard}
+            onDisconnectWallet={onDisconnectWallet}
+            onLibrary={onLibrary}
+            onSwitchAccount={onSwitchAccount}
+            onSwitchBase={onSwitchBase}
+            onToggleWalletMenu={onToggleWalletMenu}
+            walletAddress={walletAddress}
+            walletLoading={walletLoading}
+            walletMenuOpen={walletMenuOpen}
+            walletProviderName={walletProviderName}
+            walletProviderOptions={walletProviderOptions}
+          />
+          <button aria-expanded={mobileMenuOpen} aria-label="Open menu" className="mobile-menu-button" onClick={onToggleMobileMenu} type="button">
+            <span />
+            <span />
+          </button>
+        </div>
+      </div>
+
+      {mobileMenuOpen ? (
+        <div className="mobile-menu-panel">
+          <button onClick={onScrollDrops} type="button">Drops</button>
+          <button onClick={onScrollCollections} type="button">Collections</button>
+          <button onClick={onScrollCreate} type="button">Create</button>
+          <button onClick={onOpenCreate} type="button">Open creator studio</button>
+          <button onClick={onDashboard} type="button">Dashboard</button>
+          <button onClick={onLibrary} type="button">Library</button>
+          <button onClick={onCloseMobileMenu} type="button">Close</button>
+        </div>
+      ) : null}
+    </header>
+  );
+}
+
+function WalletMenu({
+  isCorrectChain,
+  onConnectWallet,
+  onCopyWalletAddress,
+  onDashboard,
+  onDisconnectWallet,
+  onLibrary,
+  onSwitchAccount,
+  onSwitchBase,
+  onToggleWalletMenu,
+  walletAddress,
+  walletLoading,
+  walletMenuOpen,
+  walletProviderName,
+  walletProviderOptions
+}: {
+  isCorrectChain: boolean;
+  onConnectWallet: (providerOption?: WalletProviderOption) => Promise<void>;
+  onCopyWalletAddress: () => Promise<void>;
+  onDashboard: () => void;
+  onDisconnectWallet: () => Promise<void>;
+  onLibrary: () => void;
+  onSwitchAccount: () => Promise<void>;
+  onSwitchBase: () => void;
+  onToggleWalletMenu: () => void;
+  walletAddress: string;
+  walletLoading: boolean;
+  walletMenuOpen: boolean;
+  walletProviderName?: string;
+  walletProviderOptions: WalletProviderOption[];
+}) {
+  return (
+    <div className="wallet-menu">
+      <button
+        aria-expanded={walletMenuOpen}
+        className={walletAddress ? "wallet-button connected" : "wallet-button"}
+        disabled={walletLoading}
+        onClick={onToggleWalletMenu}
+        type="button"
+      >
+        {walletAddress ? (
+          <span className="wallet-status-dot" aria-hidden="true" />
+        ) : (
+          <span className="wallet-glyph" aria-hidden="true" />
+        )}
+        <strong>
+          {walletLoading
+            ? "Opening..."
+            : walletAddress
+              ? isCorrectChain
+                ? shortAddress(walletAddress)
+                : "Switch to Base"
+              : "Connect"}
+        </strong>
+      </button>
+
+      {walletMenuOpen && walletAddress ? (
+        <div className="wallet-dropdown">
+          <span>Connected wallet</span>
+          <strong>{shortAddress(walletAddress)}</strong>
+          <small>{walletProviderName ?? "Wallet"} on {isCorrectChain ? "Base" : "wrong network"}</small>
+          <button onClick={() => void onCopyWalletAddress()} type="button">Copy address</button>
+          <button onClick={() => void onSwitchAccount()} type="button">Change account</button>
+          {!isCorrectChain ? <button onClick={onSwitchBase} type="button">Switch to Base</button> : null}
+          <button onClick={onDashboard} type="button">Dashboard</button>
+          <button onClick={onLibrary} type="button">Library</button>
+          <a href={`https://basescan.org/address/${walletAddress}`} rel="noreferrer" target="_blank">View on Basescan</a>
+          <button className="danger-link" onClick={() => void onDisconnectWallet()} type="button">Disconnect</button>
+        </div>
+      ) : null}
+
+      {walletMenuOpen && !walletAddress ? (
+        <div className="wallet-dropdown wallet-picker" role="dialog" aria-label="Choose wallet">
+          <span>Connect wallet</span>
+          <strong>Choose how to enter Droproom</strong>
+          {walletProviderOptions.length ? (
+            <div className="wallet-option-list">
+              {walletProviderOptions.map((option) => (
+                <button className="wallet-option" key={option.id} onClick={() => void onConnectWallet(option)} type="button">
+                  <WalletProviderIcon option={option} />
+                  <span>
+                    <strong>{option.name}</strong>
+                    <small>{option.isPreferred ? "Recommended for Base" : option.kind === "metamask" ? "Injected wallet" : "Detected wallet"}</small>
+                  </span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p className="wallet-empty-state">
+              Open Droproom in Base Wallet, Coinbase Wallet, MetaMask, or another EIP-1193 wallet browser to connect.
+            </p>
+          )}
+        </div>
+      ) : null}
     </div>
   );
 }
 
-function Hero({ onCreate }: { onCreate: () => void }) {
+function MarketplaceHero({
+  drops,
+  dropsLoading,
+  onCreate,
+  onExplore
+}: {
+  drops: Drop[];
+  dropsLoading: boolean;
+  onCreate: () => void;
+  onExplore: () => void;
+}) {
   return (
-    <section className="hero hero-premium">
-      <div className="hero-copy">
-        <p className="eyebrow">Creator-first NFT drops on Base</p>
-        <h1>Create limited Base drops. Get collected.</h1>
-        <p>
-          Upload artwork, start from a blank canvas, or generate with AI. Publish limited image and looping GIF editions,
-          share the drop, and let collectors mint directly on Base.
-        </p>
-        <div className="hero-actions">
-          <button className="primary-button" onClick={onCreate} type="button">
-            Launch Drop <span>Base</span>
-          </button>
-          <span className="microcopy">Free mints stay platform-fee free. Collectors pay their own Base network gas.</span>
+    <section className="market-hero">
+      <div className="market-hero-inner">
+        <div className="hero-copy">
+          <div className="live-badge">
+            <span />
+            Now live on Base
+          </div>
+          <h1>
+            Create.
+            <br />
+            <span>Drop.</span>
+            <br />
+            Collect.
+          </h1>
+          <p>
+            Launch limited NFT collections on Base in minutes. No code. No friction. Just clean minting, real IPFS media,
+            and collector-ready sharing.
+          </p>
+          <div className="hero-actions">
+            <button className="primary-button" onClick={onCreate} type="button">Start Creating</button>
+            <button className="secondary-button" onClick={onExplore} type="button">
+              Explore Drops <span aria-hidden="true">→</span>
+            </button>
+          </div>
+          <div className="creator-proof">
+            <div className="creator-stack" aria-hidden="true">
+              <span />
+              <span />
+              <span />
+            </div>
+            <p>Real Base drops, real wallet minting, no mocked transactions.</p>
+          </div>
+        </div>
+
+        <HeroDropStack drops={drops} dropsLoading={dropsLoading} />
+      </div>
+    </section>
+  );
+}
+
+function HeroDropStack({ drops, dropsLoading }: { drops: Drop[]; dropsLoading: boolean }) {
+  const frontDrop = drops[0];
+  const leftDrop = drops[1];
+  const rightDrop = drops[2];
+
+  return (
+    <div className="hero-card-stage" aria-label="Featured live drops">
+      <div className="hero-card-cloud">
+        <HeroVisualCard drop={leftDrop} loading={dropsLoading} position="left" />
+        <HeroVisualCard drop={rightDrop} loading={dropsLoading} position="right" />
+        <HeroVisualCard drop={frontDrop} loading={dropsLoading} position="front" />
+      </div>
+    </div>
+  );
+}
+
+function HeroVisualCard({ drop, loading, position }: { drop?: Drop; loading: boolean; position: "front" | "left" | "right" }) {
+  const progress = drop ? getDropProgress(drop) : 0;
+
+  return (
+    <article className={`hero-visual-card ${position}${!drop ? " is-empty" : ""}`}>
+      <div className="hero-visual-art">
+        <div className="hero-visual-gradient" aria-label={drop ? `${drop.title} preview` : loading ? "Loading live drops" : "Drop preview"} />
+        {drop ? (
+          <div className="hero-visual-title">
+            <small>#{drop.tokenId ?? drop.id}</small>
+            <strong>{drop.title}</strong>
+          </div>
+        ) : null}
+      </div>
+      <div className="hero-visual-meta">
+        <div>
+          <small>Price</small>
+          <strong>{drop ? formatDropPrice(drop) : "-"}</strong>
+        </div>
+        <div>
+          <small>Minted</small>
+          <strong>{drop ? `${drop.minted}/${drop.edition}` : "-"}</strong>
         </div>
       </div>
-      <div className="hero-art hero-media-shell">
-        <div className="hero-product-card" aria-hidden="true">
-          <div className="product-media">
-            <Image alt="" className="hero-variant-image" height={720} priority src={heroFallbackImage} width={720} />
+      <div className="progress-track">
+        <span style={{ width: `${progress}%` }} />
+      </div>
+    </article>
+  );
+}
+
+function LiveDropsSection({
+  activeLibrary,
+  drops,
+  dropsLoading,
+  isMinting,
+  onCreate,
+  onMint,
+  onSelect,
+  selectedDropId
+}: {
+  activeLibrary: string[];
+  drops: Drop[];
+  dropsLoading: boolean;
+  isMinting: boolean;
+  onCreate: () => void;
+  onMint: (drop: Drop) => void;
+  onSelect: (id: string) => void;
+  selectedDropId: string | null;
+}) {
+  return (
+    <section className="section-wrap live-drops-section" id="drops">
+      <div className="section-heading">
+        <div>
+          <h2>Live Drops</h2>
+          <p>Limited collections minting right now on Base.</p>
+        </div>
+        <button className="text-link" onClick={onCreate} type="button">Create a drop ↗</button>
+      </div>
+
+      {dropsLoading ? (
+        <div className="drop-card-grid">
+          {[0, 1, 2].map((item) => (
+            <div className="market-drop-card skeleton" key={item} />
+          ))}
+        </div>
+      ) : drops.length ? (
+        <div className="drop-card-grid">
+          {drops.map((drop) => (
+            <LiveDropCard
+              drop={drop}
+              isMinting={isMinting}
+              isOwned={activeLibrary.includes(drop.id)}
+              isSelected={drop.id === selectedDropId}
+              key={drop.id}
+              onMint={() => onMint(drop)}
+              onSelect={() => onSelect(drop.id)}
+            />
+          ))}
+        </div>
+      ) : (
+        <GenesisEmptyState onCreate={onCreate} />
+      )}
+    </section>
+  );
+}
+
+function LiveDropCard({
+  drop,
+  isMinting,
+  isOwned,
+  isSelected,
+  onMint,
+  onSelect
+}: {
+  drop: Drop;
+  isMinting: boolean;
+  isOwned: boolean;
+  isSelected: boolean;
+  onMint: () => void;
+  onSelect: () => void;
+}) {
+  const remaining = getDropRemaining(drop);
+  const soldOut = remaining === 0;
+  const progress = getDropProgress(drop);
+
+  return (
+    <article className={isSelected ? "market-drop-card selected" : "market-drop-card"}>
+      <button className="market-drop-art" onClick={onSelect} type="button">
+        <ArtworkMedia alt={drop.title} src={drop.image} />
+        <span className={soldOut ? "drop-state sold" : "drop-state live"}>
+          <i />
+          {soldOut ? "Sold out" : "Live"}
+        </span>
+        <span className="market-drop-title">
+          <strong>{drop.title}</strong>
+          <small>by {drop.creator}</small>
+        </span>
+      </button>
+
+      <div className="market-drop-body">
+        <div className="drop-stat-row">
+          <div>
+            <small>Price</small>
+            <strong>{formatDropPrice(drop)}</strong>
           </div>
-          <div className="product-copy">
-            <span>Live media drops</span>
-            <strong>Publish image or 1s GIF editions</strong>
-            <small>Real drops appear below after onchain publish.</small>
-            <div className="product-badges">
-              <span>Base mainnet</span>
-              <span>IPFS media</span>
-              <span>Ready</span>
-            </div>
+          <div>
+            <small>Remaining</small>
+            <strong>{remaining}</strong>
+          </div>
+        </div>
+        <div className="drop-progress-copy">
+          <span>{drop.minted} minted</span>
+          <span>{drop.edition} total</span>
+        </div>
+        <div className="progress-track">
+          <span style={{ width: `${progress}%` }} />
+        </div>
+        <div className="drop-card-actions">
+          <button className="secondary-button" onClick={onSelect} type="button">Details</button>
+          <button className="primary-button" disabled={soldOut || isOwned || isMinting} onClick={onMint} type="button">
+            {soldOut ? "Sold out" : isOwned ? "Owned" : isMinting ? "Minting..." : "Mint Now"}
+          </button>
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function CreateCta({ onCreate, onDashboard }: { onCreate: () => void; onDashboard: () => void }) {
+  return (
+    <section className="section-wrap" id="create">
+      <div className="create-cta">
+        <div className="create-cta-copy">
+          <h2>
+            Ready to drop
+            <br />
+            your collection?
+          </h2>
+          <p>
+            Set up your artwork, define supply and price, upload metadata to IPFS, then publish the drop with a real Base
+            transaction.
+          </p>
+          <div className="hero-actions">
+            <button className="primary-button light" onClick={onCreate} type="button">Create Drop</button>
+            <button className="secondary-button light" onClick={onDashboard} type="button">Creator Dashboard</button>
+          </div>
+        </div>
+        <div className="create-steps" aria-label="Create flow">
+          <div>
+            <span>1</span>
+            <strong>Upload Assets</strong>
+            <small>Images, GIFs, AI variations, and metadata.</small>
+          </div>
+          <div>
+            <span>2</span>
+            <strong>Set Rules</strong>
+            <small>Supply, free or paid mint, and review checks.</small>
+          </div>
+          <div>
+            <span>3</span>
+            <strong>Launch</strong>
+            <small>Publish on Base and share the live mint page.</small>
           </div>
         </div>
       </div>
@@ -951,30 +1333,99 @@ function Hero({ onCreate }: { onCreate: () => void }) {
   );
 }
 
-function BaseReadyStrip() {
+function CollectionsSection({ drops, onSelect }: { drops: Drop[]; onSelect: (id: string) => void }) {
   return (
-    <aside className="base-ready-strip">
-      <div className="base-ready-copy">
-        <strong>Save Droproom to stay on top of new drops and alerts.</strong>
+    <section className="section-wrap collections-section" id="collections">
+      <div className="section-heading">
+        <div>
+          <h2>Trending Collections</h2>
+          <p>Most active Droproom drops from the live index.</p>
+        </div>
       </div>
-    </aside>
+      {drops.length ? (
+        <div className="collection-grid">
+          {drops.map((drop) => (
+            <button className="collection-card" key={drop.id} onClick={() => onSelect(drop.id)} type="button">
+              <span className="collection-art">
+                <ArtworkMedia alt={drop.title} src={drop.image} />
+              </span>
+              <strong>{drop.title}</strong>
+              <span>
+                <small>Minted</small>
+                <b>{drop.minted}/{drop.edition}</b>
+              </span>
+              <span>
+                <small>Price</small>
+                <b>{formatDropPrice(drop)}</b>
+              </span>
+            </button>
+          ))}
+        </div>
+      ) : (
+        <div className="empty-state">Trending collections appear after live indexed drops are available.</div>
+      )}
+    </section>
   );
 }
 
-function ViewRail({ activeView, onSelect }: { activeView: View; onSelect: (view: View) => void }) {
+function MarketplaceFooter() {
   return (
-    <div className="view-rail" aria-label="Swipe navigation">
-      <span>Swipe</span>
-      {viewOrder.map((item) => (
-        <button
-          aria-label={`Open ${item}`}
-          className={activeView === item ? "active" : ""}
-          key={item}
-          onClick={() => onSelect(item)}
-          type="button"
-        />
-      ))}
-    </div>
+    <footer className="market-footer">
+      <div>
+        <div className="market-brand footer-brand">
+          <span className="market-brand-icon">
+            <Image alt="Droproom icon" height={56} src={brandIconPrimary} width={56} />
+          </span>
+          <span>Droproom</span>
+        </div>
+        <p>The curated launchpad for limited NFT drops on Base. Built for creators who value quality over noise.</p>
+      </div>
+      <nav aria-label="Footer">
+        <a href="/terms">Terms</a>
+        <a href="/privacy">Privacy</a>
+        <a href="/support">Support</a>
+      </nav>
+    </footer>
+  );
+}
+
+function ArtworkMedia({ alt, src }: { alt: string; src: string }) {
+  return (
+    <>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img aria-hidden="true" alt="" className="artwork-backdrop" src={src} />
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img alt={alt} className="artwork-main" src={src} />
+    </>
+  );
+}
+
+function getDropRemaining(drop: Drop) {
+  return Math.max(drop.edition - drop.minted, 0);
+}
+
+function getDropProgress(drop: Drop) {
+  return Math.min(Math.max((drop.minted / Math.max(drop.edition, 1)) * 100, 0), 100);
+}
+
+function formatDropPrice(drop: Drop) {
+  return drop.isFree || drop.price === 0 ? "Free" : `${drop.price} ETH`;
+}
+
+function WalletProviderIcon({ option }: { option: WalletProviderOption }) {
+  if (option.icon) {
+    return (
+      <span className="wallet-option-icon">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img alt="" src={option.icon} />
+      </span>
+    );
+  }
+
+  return (
+    <span className={`wallet-option-icon ${option.kind}`} aria-hidden="true">
+      {option.kind === "base" || option.kind === "coinbase" ? "B" : option.kind === "metamask" ? "M" : "W"}
+    </span>
   );
 }
 
@@ -985,8 +1436,7 @@ function DropCard({ drop, isSelected, onClick }: { drop: Drop; isSelected: boole
   return (
     <button className={[isSelected ? "drop-card selected" : "drop-card", soldOut ? "is-sold-out" : ""].filter(Boolean).join(" ")} onClick={onClick} type="button">
       <div className="drop-image-wrap">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img alt={drop.title} src={drop.image} />
+        <ArtworkMedia alt={drop.title} src={drop.image} />
         {isSelected ? <span className="live-dot">Selected</span> : soldOut ? <span className="sold-out">Sold out</span> : <span className="live-dot">Live</span>}
       </div>
       <div className="drop-card-copy">
@@ -1036,8 +1486,7 @@ function DropDetail({
   return (
     <aside className="drop-detail">
       <div className="detail-art">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img alt={drop.title} src={drop.image} />
+        <ArtworkMedia alt={drop.title} src={drop.image} />
       </div>
       <div className="detail-copy">
         <p className="eyebrow">{drop.creator}</p>
@@ -1170,8 +1619,9 @@ function SoldOutShowcase({ drops, onSelect }: { drops: Drop[]; onSelect: (id: st
       <div className="sold-out-strip">
         {drops.map((drop) => (
           <button key={drop.id} onClick={() => onSelect(drop.id)} type="button">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img alt={drop.title} src={drop.image} />
+            <span className="sold-out-art">
+              <ArtworkMedia alt={drop.title} src={drop.image} />
+            </span>
             <span>{drop.title}</span>
             <small>{drop.edition}/{drop.edition} collected</small>
           </button>
@@ -1280,8 +1730,7 @@ function CreateFlow(props: {
               <div className="variation-grid">
                 {props.aiImages.map((image) => (
                   <button key={image.slice(0, 64)} onClick={() => props.onSelectAi(image)} type="button">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img alt="AI variation" src={image} />
+                    <ArtworkMedia alt="AI variation" src={image} />
                     <span>Use this</span>
                   </button>
                 ))}
@@ -1381,10 +1830,7 @@ function LivePreview({ draft }: { draft: StudioDraft }) {
     <div className="live-preview-card">
       <div className={`preview-art ${draft.frame}`}>
         {draft.image ? (
-          <>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img alt={draft.title} src={draft.image} />
-          </>
+          <ArtworkMedia alt={draft.title} src={draft.image} />
         ) : (
           <div className="preview-empty">Awaiting artwork</div>
         )}
@@ -1503,8 +1949,7 @@ function Dashboard({
             <div className="dashboard-row" key={drop.id}>
               <div className="dashboard-row-main">
                 <div className="dashboard-row-media">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img alt={drop.title} src={drop.image} />
+                  <ArtworkMedia alt={drop.title} src={drop.image} />
                 </div>
                 <div className="dashboard-row-copy">
                   <strong>{drop.title}</strong>
@@ -1548,8 +1993,15 @@ function BaseNotificationAdminPanel({ drops, onRequest }: { drops: Drop[]; onReq
   const [audienceCount, setAudienceCount] = useState<number | null>(null);
   const [status, setStatus] = useState("");
   const [loading, setLoading] = useState<"audience" | "send" | "test" | null>(null);
-  const titleInvalid = title.trim().length === 0 || title.trim().length > 30;
-  const messageInvalid = message.trim().length === 0 || message.trim().length > 200;
+  const [broadcastPreviewOpen, setBroadcastPreviewOpen] = useState(false);
+  const trimmedTitle = title.trim();
+  const trimmedMessage = message.trim();
+  const trimmedTargetPath = targetPath.trim();
+  const normalizedTargetPath = trimmedTargetPath ? (trimmedTargetPath.startsWith("/") ? trimmedTargetPath : `/${trimmedTargetPath}`) : "/";
+  const titleInvalid = trimmedTitle.length === 0 || trimmedTitle.length > 30;
+  const messageInvalid = trimmedMessage.length === 0 || trimmedMessage.length > 200;
+  const targetPathInvalid = normalizedTargetPath.length > 500;
+  const notificationInvalid = titleInvalid || messageInvalid || targetPathInvalid;
   const liveDrops = drops.filter((drop) => drop.tokenId);
 
   function selectTargetDrop(dropId: string) {
@@ -1559,17 +2011,40 @@ function BaseNotificationAdminPanel({ drops, onRequest }: { drops: Drop[]; onReq
     setTitle(`${selected.title}`.slice(0, 30));
     setMessage(`A limited Droproom edition is live on Base: ${selected.title}`.slice(0, 200));
     setTargetPath(`/?drop=${selected.id}`);
+    setBroadcastPreviewOpen(false);
+  }
+
+  function requestBroadcastPreview() {
+    if (notificationInvalid) {
+      setBroadcastPreviewOpen(false);
+      setStatus("Broadcast is blocked until the title, message, and target path meet the limits below.");
+      return;
+    }
+
+    setBroadcastPreviewOpen(true);
+    setStatus("Broadcast has not been sent. Review the summary, then confirm to sign and send.");
   }
 
   async function run(action: "audience" | "send" | "test") {
+    if (action !== "audience" && notificationInvalid) {
+      setStatus("Notification is blocked until the title, message, and target path meet the limits below.");
+      return;
+    }
+
     try {
       setLoading(action);
-      setStatus(action === "audience" ? "Checking Base App notification audience..." : "Sign with the admin wallet to continue.");
+      setStatus(
+        action === "audience"
+          ? "Checking current Base App notification audience..."
+          : action === "test"
+            ? "Wallet signature required to send a test notification to your admin wallet."
+            : "Wallet signature required to broadcast this notification."
+      );
       const result = await onRequest({
         action,
-        message,
-        targetPath,
-        title
+        message: trimmedMessage,
+        targetPath: normalizedTargetPath,
+        title: trimmedTitle
       });
 
       if (typeof result.notificationEnabledCount === "number") {
@@ -1577,12 +2052,15 @@ function BaseNotificationAdminPanel({ drops, onRequest }: { drops: Drop[]; onReq
       }
 
       if (action === "audience") {
-        setStatus(`${result.notificationEnabledCount ?? 0} saved users currently have notifications enabled.`);
+        setStatus(`Audience check complete: ${result.notificationEnabledCount ?? 0} saved Base App users currently have notifications enabled.`);
+      } else if (action === "test") {
+        setStatus(`Test send complete: sent ${result.sentCount ?? 0} of ${result.targetedCount ?? 0} to the admin wallet. Failed: ${result.failedCount ?? 0}.`);
       } else {
-        setStatus(`${action === "test" ? "Test sent" : "Sent"} ${result.sentCount ?? 0}/${result.targetedCount ?? 0}. Failed: ${result.failedCount ?? 0}.`);
+        setBroadcastPreviewOpen(false);
+        setStatus(`Broadcast complete: sent ${result.sentCount ?? 0} of ${result.targetedCount ?? 0} enabled audience wallets. Failed: ${result.failedCount ?? 0}.`);
       }
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Base notification action failed.");
+      setStatus(error instanceof Error ? error.message : "Base notification request failed before completion.");
     } finally {
       setLoading(null);
     }
@@ -1613,36 +2091,92 @@ function BaseNotificationAdminPanel({ drops, onRequest }: { drops: Drop[]; onReq
         </label>
         <label className="field">
           <span>Title</span>
-          <input maxLength={30} onChange={(event) => setTitle(event.target.value)} value={title} />
-          <small>{title.trim().length}/30</small>
+          <input
+            maxLength={30}
+            onChange={(event) => {
+              setTitle(event.target.value);
+              setBroadcastPreviewOpen(false);
+            }}
+            value={title}
+          />
+          <small>{trimmedTitle.length}/30{titleInvalid ? " - enter 1-30 characters" : ""}</small>
         </label>
       </div>
       <div className="field-row">
         <label className="field">
           <span>Target path</span>
-          <input onChange={(event) => setTargetPath(event.target.value)} placeholder="/?drop=1" value={targetPath} />
-          <small>Use / for home or /?drop=TOKEN_ID for a specific drop.</small>
+          <input
+            maxLength={500}
+            onChange={(event) => {
+              setTargetPath(event.target.value);
+              setBroadcastPreviewOpen(false);
+            }}
+            placeholder="/?drop=1"
+            value={targetPath}
+          />
+          <small>{normalizedTargetPath.length}/500{targetPathInvalid ? " - target path is too long" : ""}</small>
         </label>
       </div>
       <label className="field">
         <span>Message</span>
-        <textarea maxLength={200} onChange={(event) => setMessage(event.target.value)} value={message} />
-        <small>{message.trim().length}/200</small>
+        <textarea
+          maxLength={200}
+          onChange={(event) => {
+            setMessage(event.target.value);
+            setBroadcastPreviewOpen(false);
+          }}
+          value={message}
+        />
+        <small>{trimmedMessage.length}/200{messageInvalid ? " - enter 1-200 characters" : ""}</small>
       </label>
+      {broadcastPreviewOpen ? (
+        <div className="admin-notification-preview" role="status">
+          <div>
+            <p className="eyebrow">Broadcast preview</p>
+            <h3>Confirm Base App broadcast</h3>
+          </div>
+          <dl className="admin-notification-summary">
+            <div>
+              <dt>Target</dt>
+              <dd>{normalizedTargetPath}</dd>
+            </div>
+            <div>
+              <dt>Title</dt>
+              <dd>{trimmedTitle}</dd>
+            </div>
+            <div>
+              <dt>Message</dt>
+              <dd>{trimmedMessage}</dd>
+            </div>
+            <div>
+              <dt>Audience</dt>
+              <dd>{audienceCount === null ? "Not checked in this session" : `Last checked: ${audienceCount} enabled`}</dd>
+            </div>
+          </dl>
+          <div className="admin-actions">
+            <button className="secondary-button" disabled={loading !== null} onClick={() => setBroadcastPreviewOpen(false)} type="button">
+              Edit
+            </button>
+            <button className="primary-button" disabled={loading !== null || notificationInvalid} onClick={() => void run("send")} type="button">
+              {loading === "send" ? "Sending broadcast..." : "Confirm broadcast"}
+            </button>
+          </div>
+        </div>
+      ) : null}
       <div className="admin-actions">
         <button className="secondary-button" disabled={loading !== null} onClick={() => void run("audience")} type="button">
           {loading === "audience" ? "Checking..." : "Check audience"}
         </button>
-        <button className="secondary-button" disabled={loading !== null || titleInvalid || messageInvalid} onClick={() => void run("test")} type="button">
+        <button className="secondary-button" disabled={loading !== null || notificationInvalid} onClick={() => void run("test")} type="button">
           {loading === "test" ? "Sending test..." : "Send test to me"}
         </button>
         <button
           className="primary-button"
-          disabled={loading !== null || titleInvalid || messageInvalid}
-          onClick={() => void run("send")}
+          disabled={loading !== null || notificationInvalid}
+          onClick={requestBroadcastPreview}
           type="button"
         >
-          {loading === "send" ? "Sending..." : "Send notification"}
+          Review broadcast
         </button>
       </div>
       {status ? <p className="microcopy admin-status">{status}</p> : null}
