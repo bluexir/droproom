@@ -13,15 +13,15 @@ export type ShareData = {
 function getShareText(intent: ShareIntent, data: ShareData) {
   if (intent === "created") {
     const editionLabel = data.edition ? `${data.edition} edition${data.edition === 1 ? "" : "s"}` : "limited editions";
-    return `I just launched "${data.title}" on Droproom. ${editionLabel} are now live on Base.`;
+    return `I just launched "${data.title}" on Droproom. ${editionLabel} are now live on Base. @droproombase`;
   }
 
   if (intent === "minted") {
     const scarcity = typeof data.remaining === "number" ? (data.remaining > 0 ? ` Only ${data.remaining} left.` : " It is now sold out.") : "";
-    return `I just successfully minted "${data.title}" on Droproom.${scarcity}`;
+    return `I just successfully minted "${data.title}" on Droproom.${scarcity} @droproombase`;
   }
 
-  return `Collect "${data.title}" on Droproom${data.creator ? ` by ${data.creator}` : ""}.`;
+  return `Collect "${data.title}" on Droproom${data.creator ? ` by ${data.creator}` : ""}. @droproombase`;
 }
 
 function getNativeSharePayload(data: ShareData, intent: ShareIntent) {
