@@ -18,6 +18,7 @@ import {
 } from "@/lib/constants";
 import { useDroproomContract } from "@/hooks/useDroproomContract";
 import { dataUrlToFile, uploadFileToPinata, uploadJsonToPinata } from "@/lib/client/pinata-upload";
+import { compareAdminFeaturedDrops, isAdminHiddenDrop } from "@/lib/drop-visibility";
 import { getCreatorTokenEligibility } from "@/lib/eligibility";
 import { isVisibleDropId } from "@/lib/hidden-drops";
 import { copyToClipboard, shareOnFarcaster, shareOnReddit, shareOnX, type ShareData } from "@/lib/social-share";
@@ -42,9 +43,21 @@ type BaseNotificationAdminResult = {
   users?: string[];
 };
 type BaseNotificationAdminRequester = (input: BaseNotificationAdminInput) => Promise<BaseNotificationAdminResult>;
+type DropModerationAdminInput = {
+  action: "list" | "hide" | "show";
+  tokenId?: string;
+};
+type DropModerationAdminResult = {
+  drop?: Drop;
+  drops?: Drop[];
+  error?: string;
+};
+type DropModerationAdminRequester = (input: DropModerationAdminInput) => Promise<DropModerationAdminResult>;
 
 const libraryKey = "droproom:library:v1";
 const brandIconPrimary = "/brand/logo.png";
+const droproomXHandle = "@droproombase";
+const droproomXUrl = "https://x.com/droproombase";
 
 const defaultDraft: StudioDraft = {
   title: "Untitled Drop",
@@ -201,15 +214,16 @@ export function DroproomApp() {
   const isSelectedDropCreator = Boolean(
     selectedDrop?.creatorAddress && walletAddress && selectedDrop.creatorAddress.toLowerCase() === walletAddress.toLowerCase()
   );
-  const soldOutDrops = drops.filter((drop) => drop.status === "sold-out" || drop.minted >= drop.edition).slice(0, 4);
+  const prioritizedDrops = [...drops].sort(compareAdminFeaturedDrops);
+  const soldOutDrops = prioritizedDrops.filter((drop) => drop.status === "sold-out" || drop.minted >= drop.edition).slice(0, 4);
   const soldOutCount = creatorDrops.filter((drop) => drop.status === "sold-out" && drop.edition >= TOKEN_UNLOCK_MIN_EDITION).length;
   const tokenEligibility = getCreatorTokenEligibility(drops, walletAddress);
   const isPlatformAdmin = walletAddress.toLowerCase() === PLATFORM_WALLET.toLowerCase();
-  const liveDrops = drops.filter((drop) => drop.tokenId && drop.minted < drop.edition);
-  const featuredDrops = (liveDrops.length ? liveDrops : drops).slice(0, 3);
-  const collectionDrops = [...drops]
+  const liveDrops = prioritizedDrops.filter((drop) => drop.tokenId && drop.minted < drop.edition);
+  const featuredDrops = (liveDrops.length ? liveDrops : prioritizedDrops).slice(0, 3);
+  const collectionDrops = [...prioritizedDrops]
     .filter((drop) => drop.tokenId)
-    .sort((left, right) => right.minted / Math.max(right.edition, 1) - left.minted / Math.max(left.edition, 1))
+    .sort((left, right) => compareAdminFeaturedDrops(left, right) || right.minted / Math.max(right.edition, 1) - left.minted / Math.max(left.edition, 1))
     .slice(0, 4);
 
   function setActiveView(nextView: View, options: { replace?: boolean } = {}) {
@@ -293,7 +307,9 @@ export function DroproomApp() {
       const endpoint = requestedDropId ? `/api/drops?drop=${encodeURIComponent(requestedDropId)}` : "/api/drops";
       const response = await fetch(endpoint, { cache: "no-store" });
       const payload = (await response.json()) as { drops?: Drop[]; error?: string };
-      const nextDrops = (payload.drops ?? []).filter((drop) => isVisibleDropId(drop.tokenId ?? drop.id));
+      const nextDrops = (payload.drops ?? [])
+        .filter((drop) => isVisibleDropId(drop.tokenId ?? drop.id) && !isAdminHiddenDrop(drop))
+        .sort(compareAdminFeaturedDrops);
       const requestedDrop = requestedDropId ? nextDrops.find((drop) => drop.id === requestedDropId || drop.tokenId === requestedDropId) : null;
       setDrops(nextDrops);
       setSelectedDropId((current) => {
@@ -320,19 +336,23 @@ export function DroproomApp() {
     window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
   }
 
-  async function requestBaseNotificationAdmin(input: BaseNotificationAdminInput) {
+  async function signAdminAction(action: string) {
     if (!walletAddress) {
       throw new Error("Connect the Droproom admin Base Wallet first.");
     }
 
     const signedMessage = [
       "Droproom admin action",
-      `Action: ${input.action}`,
+      `Action: ${action}`,
       `Domain: ${window.location.host}`,
       `Issued At: ${new Date().toISOString()}`
     ].join("\n");
 
-    const auth = await droproom.signMessage(signedMessage);
+    return droproom.signMessage(signedMessage);
+  }
+
+  async function requestBaseNotificationAdmin(input: BaseNotificationAdminInput) {
+    const auth = await signAdminAction(input.action);
     const response = await fetch("/api/admin/base-notifications", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -342,6 +362,33 @@ export function DroproomApp() {
 
     if (!response.ok) {
       throw new Error(payload?.error ?? "Base notification request failed.");
+    }
+
+    return payload ?? {};
+  }
+
+  async function requestDropModerationAdmin(input: DropModerationAdminInput) {
+    const auth = await signAdminAction("drop-content");
+    const response = await fetch("/api/admin/drops", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...input, auth })
+    });
+    const payload = (await response.json().catch(() => null)) as DropModerationAdminResult | null;
+
+    if (!response.ok) {
+      throw new Error(payload?.error ?? "Drop moderation request failed.");
+    }
+
+    const moderatedDrop = payload?.drop;
+    if (moderatedDrop) {
+      setDrops((current) => {
+        if (isAdminHiddenDrop(moderatedDrop)) {
+          return current.filter((drop) => drop.id !== moderatedDrop.id);
+        }
+
+        return [moderatedDrop, ...current.filter((drop) => drop.id !== moderatedDrop.id)].sort(compareAdminFeaturedDrops);
+      });
     }
 
     return payload ?? {};
@@ -846,7 +893,7 @@ export function DroproomApp() {
 
           <LiveDropsSection
             activeLibrary={activeLibrary}
-            drops={drops}
+            drops={prioritizedDrops}
             dropsLoading={dropsLoading}
             isMinting={mintPending}
             onCreate={() => setActiveView("create")}
@@ -917,6 +964,7 @@ export function DroproomApp() {
             isAdmin={isPlatformAdmin}
             allDrops={drops}
             onBaseNotificationAdmin={requestBaseNotificationAdmin}
+            onDropModerationAdmin={requestDropModerationAdmin}
             onCopyLink={(drop) => void copyDropLink(drop, "Creator link copied.")}
             onShareFarcaster={(drop) => shareCreatedDrop(drop, "farcaster")}
             onShareReddit={(drop) => shareCreatedDrop(drop, "reddit")}
@@ -1456,6 +1504,9 @@ function MarketplaceFooter() {
           <span>Droproom</span>
         </div>
         <p>The curated launchpad for limited NFT drops on Base. Built for creators who value quality over noise.</p>
+        <a className="footer-social-link" href={droproomXUrl} rel="noreferrer" target="_blank">
+          Follow {droproomXHandle}
+        </a>
       </div>
       <nav aria-label="Footer">
         <a href="/terms">Terms</a>
@@ -1737,6 +1788,7 @@ function CreateFlow(props: {
           <h1>Start from the strongest path for your drop.</h1>
           <p>Keep it simple: image or short looping GIF, limited editions, free or paid minting, and a clean onchain review before publish.</p>
         </div>
+        <CreatorPolicyNotice />
         <div className="start-grid">
           <StartCard icon={<i aria-hidden="true" className="mode-glyph upload-glyph" />} label="Upload artwork" onClick={() => props.onBegin("upload")} text="Bring a PNG, JPG, WEBP, or one-second GIF and turn it into a Base drop." />
           <StartCard icon={<i aria-hidden="true" className="mode-glyph canvas-glyph" />} label="Start from blank" onClick={() => props.onBegin("blank")} text="Build a simple card with background, frame, title, and preview." />
@@ -1881,6 +1933,7 @@ function CreateFlow(props: {
         <button className="primary-button wide" disabled={!props.hasArtwork} onClick={() => props.onStep("review")} type="button">
           Review drop <span>→</span>
         </button>
+        <CreatorPolicyNotice compact />
         {!props.hasArtwork ? <p className="microcopy">Add artwork, choose a blank canvas, or select an AI variation before review.</p> : null}
       </div>
 
@@ -1962,6 +2015,7 @@ function ReviewStep({
             <strong>{draft.edition >= TOKEN_UNLOCK_MIN_EDITION ? "Can qualify after sold out + review" : `Needs ${TOKEN_UNLOCK_MIN_EDITION}+ editions`}</strong>
           </li>
         </ul>
+        <CreatorPolicyNotice compact />
         <div className="review-actions">
           <button className="secondary-button" disabled={publishPending} onClick={onBack} type="button">
             Back to studio
@@ -1976,6 +2030,18 @@ function ReviewStep({
   );
 }
 
+function CreatorPolicyNotice({ compact = false }: { compact?: boolean }) {
+  return (
+    <div className={compact ? "creator-policy-notice compact" : "creator-policy-notice"}>
+      <strong>Creator quality rule</strong>
+      <span>
+        Keep one active drop at a time. Publishing a second or third drop before your current drop sells out may cause duplicate
+        active drops to be hidden by admin review.
+      </span>
+    </div>
+  );
+}
+
 function Dashboard({
   allDrops,
   drops,
@@ -1983,6 +2049,7 @@ function Dashboard({
   eligibilityStatus,
   isAdmin,
   onBaseNotificationAdmin,
+  onDropModerationAdmin,
   onCopyLink,
   onShareFarcaster,
   onShareReddit,
@@ -1995,6 +2062,7 @@ function Dashboard({
   eligibilityStatus: "locked" | "review-ready";
   isAdmin: boolean;
   onBaseNotificationAdmin: BaseNotificationAdminRequester;
+  onDropModerationAdmin: DropModerationAdminRequester;
   onCopyLink: (drop: Drop) => void;
   onShareFarcaster: (drop: Drop) => void;
   onShareReddit: (drop: Drop) => void;
@@ -2058,7 +2126,104 @@ function Dashboard({
           <div className="empty-state">Create your first onchain drop to see dashboard metrics.</div>
         )}
       </div>
-      {isAdmin ? <BaseNotificationAdminPanel drops={allDrops} onRequest={onBaseNotificationAdmin} /> : null}
+      {isAdmin ? (
+        <>
+          <DropModerationAdminPanel initialDrops={allDrops} onRequest={onDropModerationAdmin} />
+          <BaseNotificationAdminPanel drops={allDrops} onRequest={onBaseNotificationAdmin} />
+        </>
+      ) : null}
+    </section>
+  );
+}
+
+function DropModerationAdminPanel({
+  initialDrops,
+  onRequest
+}: {
+  initialDrops: Drop[];
+  onRequest: DropModerationAdminRequester;
+}) {
+  const [adminDrops, setAdminDrops] = useState<Drop[]>(initialDrops);
+  const [status, setStatus] = useState("");
+  const [loading, setLoading] = useState<"list" | string | null>(null);
+
+  useEffect(() => {
+    setAdminDrops(initialDrops);
+  }, [initialDrops]);
+
+  async function run(action: "list" | "hide" | "show", tokenId?: string) {
+    try {
+      setLoading(action === "list" ? "list" : `${action}:${tokenId}`);
+      setStatus(action === "list" ? "Loading indexed drops..." : `${action === "hide" ? "Hiding" : "Restoring"} token #${tokenId}...`);
+      const result = await onRequest({ action, tokenId });
+
+      if (result.drops) {
+        setAdminDrops(result.drops);
+      } else if (result.drop) {
+        setAdminDrops((current) => [result.drop as Drop, ...current.filter((drop) => drop.id !== result.drop?.id)]);
+      }
+
+      setStatus(
+        action === "list"
+          ? `Loaded ${result.drops?.length ?? 0} indexed drops.`
+          : `Token #${tokenId} ${action === "hide" ? "hidden from public surfaces" : "restored to public surfaces"}.`
+      );
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Drop moderation action failed.");
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  return (
+    <section className="admin-notification-panel admin-content-panel">
+      <div className="admin-panel-head">
+        <div>
+          <p className="eyebrow">Admin content</p>
+          <h2>Control public drop visibility.</h2>
+          <p>Hide test or duplicate drops from the homepage, Explore, Collections, and library discovery without touching the onchain token.</p>
+        </div>
+        <button className="secondary-button" disabled={loading !== null} onClick={() => void run("list")} type="button">
+          {loading === "list" ? "Loading..." : "Refresh"}
+        </button>
+      </div>
+      <div className="admin-drop-list">
+        {adminDrops.length ? (
+          adminDrops.map((drop) => {
+            const hidden = isAdminHiddenDrop(drop);
+            const tokenId = drop.tokenId ?? drop.id;
+
+            return (
+              <div className={hidden ? "admin-drop-row is-hidden" : "admin-drop-row"} key={drop.id}>
+                <span className="admin-drop-art">
+                  <ArtworkMedia alt={drop.title} src={drop.image} />
+                </span>
+                <div>
+                  <strong>{drop.title}</strong>
+                  <span>
+                    #{tokenId} · {drop.minted}/{drop.edition} minted · {hidden ? "Hidden" : drop.status}
+                  </span>
+                </div>
+                <button
+                  className={hidden ? "secondary-button" : "danger-button"}
+                  disabled={loading !== null}
+                  onClick={() => void run(hidden ? "show" : "hide", tokenId)}
+                  type="button"
+                >
+                  {loading === `hide:${tokenId}` || loading === `show:${tokenId}`
+                    ? "Saving..."
+                    : hidden
+                      ? "Show"
+                      : "Hide"}
+                </button>
+              </div>
+            );
+          })
+        ) : (
+          <div className="empty-state">No indexed drops found yet.</div>
+        )}
+      </div>
+      {status ? <p className="microcopy admin-status">{status}</p> : null}
     </section>
   );
 }

@@ -3,6 +3,7 @@ import type { Address } from "viem";
 
 import { readDropBalance, readDroproomSummary } from "@/lib/contract";
 import { getBasescanTxUrl } from "@/lib/contract/links";
+import { isAdminHiddenDropStatus } from "@/lib/drop-visibility";
 import { isVisibleDropId } from "@/lib/hidden-drops";
 import { verifyDropMintedTx } from "@/lib/server/chain-events";
 import { supabaseRest } from "@/lib/server/supabase-rest";
@@ -18,6 +19,11 @@ type MintRow = {
   quantity: number;
   token_id: string;
   tx_hash: string;
+};
+
+type DropVisibilityRow = {
+  status: string | null;
+  token_id: string;
 };
 
 export async function GET(request: Request) {
@@ -38,8 +44,9 @@ export async function GET(request: Request) {
       console.error("Mint index fetch failed", error);
     }
 
-    const visibleRows = rows.filter((row) => isVisibleDropId(row.token_id));
-    const discoveredRows = await discoverWalletMints(wallet as Address);
+    const adminHiddenTokenIds = await fetchAdminHiddenTokenIds();
+    const visibleRows = rows.filter((row) => isPublicTokenId(row.token_id, adminHiddenTokenIds));
+    const discoveredRows = await discoverWalletMints(wallet as Address, adminHiddenTokenIds);
     const seenTokenIds = new Set(visibleRows.map((row) => row.token_id));
     const mergedRows = [...visibleRows, ...discoveredRows.filter((row) => !seenTokenIds.has(row.token_id))];
 
@@ -94,13 +101,31 @@ export async function POST(request: Request) {
   }
 }
 
-async function discoverWalletMints(wallet: Address): Promise<MintRow[]> {
+async function fetchAdminHiddenTokenIds() {
+  try {
+    const rows = await supabaseRest<DropVisibilityRow[]>(
+      `drops?select=token_id,status&status=eq.review-pending&limit=500`
+    );
+    return new Set(rows.filter((row) => isAdminHiddenDropStatus(row.status)).map((row) => row.token_id));
+  } catch (error) {
+    console.error("Hidden drop visibility fetch failed", error);
+    return new Set<string>();
+  }
+}
+
+function isPublicTokenId(tokenId: string, adminHiddenTokenIds: Set<string>) {
+  return isVisibleDropId(tokenId) && !adminHiddenTokenIds.has(tokenId);
+}
+
+async function discoverWalletMints(wallet: Address, adminHiddenTokenIds: Set<string>): Promise<MintRow[]> {
   try {
     const summary = await readDroproomSummary();
     const latestTokenId = Number(summary.nextTokenId) - 1;
     if (latestTokenId < 1) return [];
 
-    const tokenIds = Array.from({ length: latestTokenId }, (_, index) => String(latestTokenId - index)).filter(isVisibleDropId);
+    const tokenIds = Array.from({ length: latestTokenId }, (_, index) => String(latestTokenId - index)).filter((tokenId) =>
+      isPublicTokenId(tokenId, adminHiddenTokenIds)
+    );
     const balances = await Promise.all(
       tokenIds.map(async (tokenId) => {
         try {

@@ -3,6 +3,7 @@ import { formatEther } from "viem";
 
 import { readDrop } from "@/lib/contract";
 import { getBasescanTxUrl } from "@/lib/contract/links";
+import { isAdminHiddenDropStatus } from "@/lib/drop-visibility";
 import { isHiddenDropId, isVisibleDropId } from "@/lib/hidden-drops";
 import { ipfsUriToGatewayUrl } from "@/lib/ipfs";
 import { verifyDropCreatedTx } from "@/lib/server/chain-events";
@@ -78,15 +79,14 @@ export async function GET(request: Request) {
       console.error("Recent drop fetch failed", error);
     }
 
-    const visibleRows = rows.filter((row) => isVisibleDropId(row.token_id));
+    const visibleRows = rows.filter(isPublicDropRow);
     const syncedRows = await Promise.all(visibleRows.map(syncRowWithChain));
-    const requestedDbRow = requestedDropId
-      ? await readRequestedDropRow(requestedDropId, syncedRows)
-      : null;
+    const requestedDbRow = requestedDropId ? await readRequestedDropRow(requestedDropId, rows) : null;
+    const requestedDbRowIsHidden = Boolean(requestedDbRow && isAdminHiddenDropStatus(requestedDbRow.status));
     const requestedDrop =
-      requestedDbRow
+      requestedDbRow && !requestedDbRowIsHidden
         ? toDrop(await syncRowWithChain(requestedDbRow))
-        : requestedDropId
+        : requestedDropId && !requestedDbRowIsHidden
           ? await buildChainFallbackDrop(requestedDropId)
           : null;
     const drops = requestedDrop
@@ -100,7 +100,13 @@ export async function GET(request: Request) {
   }
 }
 
+function isPublicDropRow(row: DropRow) {
+  return isVisibleDropId(row.token_id) && !isAdminHiddenDropStatus(row.status);
+}
+
 async function syncRowWithChain(row: DropRow): Promise<DropRow> {
+  if (isAdminHiddenDropStatus(row.status)) return row;
+
   try {
     const onchain = await readDrop(row.token_id);
     const minted = Number(onchain.minted);
