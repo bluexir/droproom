@@ -19,6 +19,7 @@ import {
 import { useDroproomContract } from "@/hooks/useDroproomContract";
 import { dataUrlToFile, uploadFileToPinata, uploadJsonToPinata } from "@/lib/client/pinata-upload";
 import { compareAdminFeaturedDrops, isAdminHiddenDrop } from "@/lib/drop-visibility";
+import { getDropPath, getDropPermalink } from "@/lib/drop-links";
 import { getCreatorTokenEligibility } from "@/lib/eligibility";
 import { isVisibleDropId } from "@/lib/hidden-drops";
 import { copyToClipboard, shareOnFarcaster, shareOnReddit, shareOnX, type ShareData } from "@/lib/social-share";
@@ -135,10 +136,8 @@ function resolveAppOrigin() {
   return /localhost|127\.0\.0\.1/i.test(window.location.host) ? currentOrigin : canonical;
 }
 
-function getDropPermalink(dropId?: string) {
-  const url = new URL(resolveAppOrigin());
-  if (dropId) url.searchParams.set("drop", dropId);
-  return url.toString();
+function resolveDropPermalink(drop: Drop) {
+  return getDropPermalink(resolveAppOrigin(), drop);
 }
 
 function safeStorageSet(key: string, value: unknown) {
@@ -162,7 +161,7 @@ function parseLibrary(value: string | null) {
   }
 }
 
-export function DroproomApp() {
+export function DroproomApp({ initialDropId }: { initialDropId?: string } = {}) {
   const droproom = useDroproomContract();
   const [view, setView] = useState<View>("explore");
   const [createStep, setCreateStep] = useState<CreateStep>("start");
@@ -201,7 +200,9 @@ export function DroproomApp() {
     const savedLibrary = parseLibrary(window.localStorage.getItem(libraryKey));
     setLibraryByWallet(savedLibrary);
     void loadDrops();
-  }, []);
+    // loadDrops is intentionally kept as the page bootstrap routine; initialDropId is the only route input it needs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialDropId]);
 
   useEffect(() => {
     safeStorageSet(libraryKey, libraryByWallet);
@@ -303,7 +304,7 @@ export function DroproomApp() {
   async function loadDrops() {
     try {
       setDropsLoading(true);
-      const requestedDropId = new URLSearchParams(window.location.search).get("drop");
+      const requestedDropId = initialDropId ?? new URLSearchParams(window.location.search).get("drop");
       const endpoint = requestedDropId ? `/api/drops?drop=${encodeURIComponent(requestedDropId)}` : "/api/drops";
       const response = await fetch(endpoint, { cache: "no-store" });
       const payload = (await response.json()) as { drops?: Drop[]; error?: string };
@@ -316,6 +317,9 @@ export function DroproomApp() {
         if (requestedDropId) return requestedDrop?.id ?? null;
         return current ?? nextDrops[0]?.id ?? null;
       });
+      if (requestedDrop) {
+        window.history.replaceState({}, "", getDropPath(requestedDrop));
+      }
       if (requestedDropId && !requestedDrop) {
         setNotice("This shared drop is still indexing or unavailable right now.");
       } else if (!response.ok && payload.error) {
@@ -331,9 +335,15 @@ export function DroproomApp() {
   function selectDrop(id: string) {
     setSelectedDropId(id);
 
-    const url = new URL(window.location.href);
-    url.searchParams.set("drop", id);
-    window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+    const drop = drops.find((item) => item.id === id || item.tokenId === id);
+    if (drop) {
+      window.history.replaceState({}, "", getDropPath(drop));
+      return;
+    }
+
+    const fallbackUrl = new URL(window.location.href);
+    fallbackUrl.searchParams.set("drop", id);
+    window.history.replaceState({}, "", `${fallbackUrl.pathname}${fallbackUrl.search}${fallbackUrl.hash}`);
   }
 
   async function signAdminAction(action: string) {
@@ -499,13 +509,13 @@ export function DroproomApp() {
       edition: drop.edition,
       remaining: Math.max(drop.edition - drop.minted, 0),
       title: drop.title,
-      url: getDropPermalink(drop.id)
+      url: resolveDropPermalink(drop)
     };
   }
 
   async function copyDropLink(drop: Drop, successMessage = "Drop link copied.") {
     try {
-      const copied = await copyToClipboard(getDropPermalink(drop.id));
+      const copied = await copyToClipboard(resolveDropPermalink(drop));
       setNotice(copied ? successMessage : "Drop link could not be copied here.");
     } catch {
       setNotice("Drop link could not be copied here.");
@@ -762,7 +772,7 @@ export function DroproomApp() {
       setMintSuccessData({
         drop: updatedDrop,
         mintNumber: minted,
-        shareUrl: getDropPermalink(updatedDrop.id)
+        shareUrl: resolveDropPermalink(updatedDrop)
       });
       setNotice(`Successfully minted on Base. ${updatedDrop.title} is now in your library.`);
       try {
@@ -2252,7 +2262,7 @@ function BaseNotificationAdminPanel({ drops, onRequest }: { drops: Drop[]; onReq
 
     setTitle(`${selected.title}`.slice(0, 30));
     setMessage(`A limited Droproom edition is live on Base: ${selected.title}`.slice(0, 200));
-    setTargetPath(`/?drop=${selected.id}`);
+    setTargetPath(getDropPath(selected));
     setBroadcastPreviewOpen(false);
   }
 
@@ -2353,7 +2363,7 @@ function BaseNotificationAdminPanel({ drops, onRequest }: { drops: Drop[]; onReq
               setTargetPath(event.target.value);
               setBroadcastPreviewOpen(false);
             }}
-            placeholder="/?drop=1"
+            placeholder="/drop/1-droproom-genesis"
             value={targetPath}
           />
           <small>{normalizedTargetPath.length}/500{targetPathInvalid ? " - target path is too long" : ""}</small>
