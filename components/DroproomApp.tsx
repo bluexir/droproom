@@ -192,6 +192,7 @@ export function DroproomApp({ initialDropId }: { initialDropId?: string } = {}) 
     shareUrl: string;
   } | null>(null);
   const [dropsLoading, setDropsLoading] = useState(true);
+  const [shouldFocusInitialDrop, setShouldFocusInitialDrop] = useState(Boolean(initialDropId));
   const swipeStartRef = useRef<{ x: number; y: number } | null>(null);
   const hasArtwork = Boolean(draft.image);
   const walletAddress = droproom.account ?? "";
@@ -207,6 +208,12 @@ export function DroproomApp({ initialDropId }: { initialDropId?: string } = {}) 
   useEffect(() => {
     safeStorageSet(libraryKey, libraryByWallet);
   }, [libraryByWallet]);
+
+  useEffect(() => {
+    if (!initialDropId) return;
+
+    setShouldFocusInitialDrop(true);
+  }, [initialDropId]);
 
   const selectedDrop = drops.find((drop) => drop.id === selectedDropId) ?? drops[0];
   const publishedDrop = publishedDropId ? drops.find((drop) => drop.id === publishedDropId) ?? null : null;
@@ -226,6 +233,17 @@ export function DroproomApp({ initialDropId }: { initialDropId?: string } = {}) 
     .filter((drop) => drop.tokenId)
     .sort((left, right) => compareAdminFeaturedDrops(left, right) || right.minted / Math.max(right.edition, 1) - left.minted / Math.max(left.edition, 1))
     .slice(0, 4);
+
+  useEffect(() => {
+    if (!shouldFocusInitialDrop || dropsLoading || !selectedDrop) return;
+
+    const frame = window.requestAnimationFrame(() => {
+      document.getElementById("drop-detail")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      setShouldFocusInitialDrop(false);
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [dropsLoading, selectedDrop, shouldFocusInitialDrop]);
 
   function setActiveView(nextView: View, options: { replace?: boolean } = {}) {
     if (nextView !== view && !options.replace) {
