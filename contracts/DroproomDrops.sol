@@ -84,6 +84,8 @@ contract DroproomDrops is ERC1155, ERC1155Supply, ERC1155Pausable, ERC2981, Owna
         if (maxSupply == 0 || maxSupply > MAX_EDITION_SUPPLY) revert InvalidSupply();
         if (royaltyBps > MAX_ROYALTY_BPS) revert RoyaltyTooHigh();
 
+        _beforeCreateDrop();
+
         tokenId = nextTokenId++;
         drops[tokenId] = Drop({
             creator: msg.sender,
@@ -198,6 +200,9 @@ contract DroproomDrops is ERC1155, ERC1155Supply, ERC1155Pausable, ERC2981, Owna
         drop = drops[tokenId];
         if (drop.creator == address(0)) revert DropDoesNotExist();
     }
+
+    // Extension hook. V1 behavior is unchanged; V2 adds a creator supply gate.
+    function _beforeCreateDrop() internal virtual {}
 
     function _requireDropCreatorOrOwner(uint256 tokenId) private view {
         Drop memory drop = _requireDrop(tokenId);

@@ -2,6 +2,7 @@
 import type { ReactNode } from "react";
 
 import "./globals.css";
+import "./revival.css";
 
 const appName = process.env.NEXT_PUBLIC_APP_NAME ?? "Droproom";
 const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "https://baseappdroproom.com";

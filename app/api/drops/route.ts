@@ -114,7 +114,7 @@ async function syncRowWithChain(row: DropRow): Promise<DropRow> {
     return {
       ...row,
       minted,
-      status: onchain.soldOut || minted >= row.edition ? "sold-out" : "live"
+      status: onchain.soldOut || minted >= row.edition ? "sold-out" : onchain.active ? "live" : "paused"
     };
   } catch {
     return row;
@@ -250,7 +250,7 @@ async function buildChainFallbackDrop(tokenId: string): Promise<Drop | null> {
       minted,
       price: Number(formatEther(onchain.price)),
       priceWei: onchain.price.toString(),
-      status: onchain.soldOut || minted >= onchain.maxSupply ? "sold-out" : "live",
+      status: onchain.soldOut || minted >= onchain.maxSupply ? "sold-out" : onchain.active ? "live" : "paused",
       title: typeof metadata.name === "string" ? metadata.name : `Drop #${tokenId}`,
       tokenId,
       txHash: undefined

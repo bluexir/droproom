@@ -102,7 +102,7 @@ async function fetchChainFallbackDropPreview(tokenId: string): Promise<DropPrevi
       id: tokenId,
       image: imageUri ? ipfsUriToGatewayUrl(imageUri) : "",
       minted,
-      status: onchain.soldOut || minted >= onchain.maxSupply ? "sold-out" : "live",
+      status: onchain.soldOut || minted >= onchain.maxSupply ? "sold-out" : onchain.active ? "live" : "paused",
       title: typeof metadata.name === "string" ? metadata.name : `Drop #${tokenId}`,
       tokenId
     });

@@ -12,6 +12,7 @@ import { DROPROOM_MAX_EDITION_SUPPLY, DROPROOM_MAX_ROYALTY_BPS } from "@/lib/con
 import { getBasescanTxUrl } from "@/lib/contract/links";
 import { DROPROOM_CHAIN } from "@/lib/wallet/base";
 import { assertWalletClientOnBaseMainnet } from "@/lib/wallet/provider";
+import { assertCreatorCanPublish } from "@/lib/contract/creator-gate";
 
 export type DroproomDrop = {
   tokenId: bigint;
@@ -117,13 +118,17 @@ export async function readDroproomSummary(client = getDroproomPublicClient()): P
 
 export async function readDrop(tokenId: bigint | number | string, client = getDroproomPublicClient()): Promise<DroproomDrop> {
   const id = toUint256(tokenId, "tokenId");
-  const [drop, minted, remaining, soldOut] = await Promise.all([
-    client.readContract({ ...droproomContract, functionName: "drops", args: [id] }),
-    client.readContract({ ...droproomContract, functionName: "totalSupply", args: [id] }),
-    client.readContract({ ...droproomContract, functionName: "remainingSupply", args: [id] }),
-    client.readContract({ ...droproomContract, functionName: "isSoldOut", args: [id] })
-  ]);
+  const [drop, minted] = await client.multicall({
+    allowFailure: false,
+    contracts: [
+      { ...droproomContract, functionName: "drops", args: [id] },
+      { ...droproomContract, functionName: "totalSupply", args: [id] }
+    ]
+  });
   const [creator, maxSupply, price, active, metadataURI] = drop;
+  if (creator === "0x0000000000000000000000000000000000000000") throw new Error("This drop does not exist.");
+  const soldOut = minted >= BigInt(maxSupply);
+  const remaining = soldOut ? 0n : BigInt(maxSupply) - minted;
 
   return {
     tokenId: id,
@@ -162,6 +167,7 @@ export async function createDrop({ account, maxSupply, metadataURI, price, royal
   await assertWalletClientOnBaseMainnet(walletClient);
   const sender = resolveWalletAccount(walletClient, account);
   const normalized = normalizeCreateDropInput({ maxSupply, metadataURI, price, royaltyBps });
+  await assertCreatorCanPublish(sender);
 
   return walletClient.writeContract({
     ...droproomContract,
@@ -206,7 +212,10 @@ export async function getMintValue({
   tokenId: bigint | number | string;
 }) {
   const drop = await readDrop(tokenId, client);
-  return drop.price * toUint256(quantity, "quantity");
+  const requestedQuantity = toUint256(quantity, "quantity");
+  if (!drop.active) throw new Error("Minting for this drop is paused.");
+  if (requestedQuantity === 0n || requestedQuantity > drop.remaining) throw new Error("Not enough editions remain for this mint.");
+  return drop.price * requestedQuantity;
 }
 
 export async function waitForDroproomTransaction(
@@ -214,6 +223,7 @@ export async function waitForDroproomTransaction(
   client: DroproomPublicClient = getDroproomPublicClient()
 ): Promise<DroproomTransactionResult> {
   const receipt = await client.waitForTransactionReceipt({ hash });
+  if (receipt.status !== "success") throw new Error("Transaction reverted. No drop or mint was completed.");
 
   return {
     basescanUrl: getBasescanTxUrl(hash),

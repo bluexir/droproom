@@ -5,6 +5,9 @@ import { useCallback, useEffect, useRef, useState, type ReactNode, type TouchEve
 import { parseEther } from "viem";
 
 import { MintSuccessModal } from "@/components/MintSuccessModal";
+import { CreatorGateNotice } from "@/components/CreatorGateNotice";
+import { assertCreatorCanPublish } from "@/lib/contract/creator-gate";
+import { discoverDrops, isPresentationReady, type DiscoveryFilter, type DiscoverySort } from "@/lib/discovery";
 import {
   ACCEPTED_IMAGE_TYPES,
   AI_DAILY_JOB_LIMIT,
@@ -61,18 +64,20 @@ const droproomXHandle = "@droproombase";
 const droproomXUrl = "https://x.com/droproombase";
 
 const defaultDraft: StudioDraft = {
-  title: "Untitled Drop",
-  description: "A limited edition NFT drop created on Droproom.",
+  title: "",
+  description: "",
   image: "",
   background: "#07111f",
   frame: "clean",
   overlayText: "",
-  edition: 99,
+  edition: 10,
   price: 0,
   isFree: true
 };
 
 function createBlankArtwork(title = "DROPROOM", background = "#07111f") {
+  const label = (title.trim() || "YOUR DROP").slice(0, 18).toUpperCase()
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   const svg = `<svg width="1200" height="1200" viewBox="0 0 1200 1200" fill="none" xmlns="http://www.w3.org/2000/svg">
     <rect width="1200" height="1200" rx="116" fill="${background}"/>
     <rect x="88" y="88" width="1024" height="1024" rx="86" fill="url(#card)" stroke="rgba(255,255,255,.24)" stroke-width="3"/>
@@ -83,7 +88,7 @@ function createBlankArtwork(title = "DROPROOM", background = "#07111f") {
     <circle cx="802" cy="504" r="42" fill="white" opacity=".84"/>
     <path d="M600 208L780 312V520L600 624L420 520V312L600 208Z" stroke="#31F3E9" stroke-width="18" opacity=".8"/>
     <path d="M600 276L674 402H526L600 276Z" fill="white" opacity=".88"/>
-    <text x="600" y="930" text-anchor="middle" fill="white" font-family="Verdana, Arial, sans-serif" font-size="46" font-weight="700" letter-spacing="9">${title.slice(0, 18).toUpperCase()}</text>
+    <text x="600" y="930" text-anchor="middle" fill="white" font-family="Verdana, Arial, sans-serif" font-size="46" font-weight="700" letter-spacing="9">${label}</text>
     <text x="600" y="990" text-anchor="middle" fill="#8BF5FF" font-family="Verdana, Arial, sans-serif" font-size="24" font-weight="700" letter-spacing="8">LIMITED BASE DROP</text>
     <defs>
       <radialGradient id="card" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(770 250) rotate(120) scale(980)">
@@ -192,6 +197,7 @@ export function DroproomApp({ initialDropId }: { initialDropId?: string } = {}) 
     shareUrl: string;
   } | null>(null);
   const [dropsLoading, setDropsLoading] = useState(true);
+  const [dropsError, setDropsError] = useState(false);
   const [shouldFocusInitialDrop, setShouldFocusInitialDrop] = useState(Boolean(initialDropId));
   const swipeStartRef = useRef<{ x: number; y: number } | null>(null);
   const hasArtwork = Boolean(draft.image);
@@ -219,19 +225,16 @@ export function DroproomApp({ initialDropId }: { initialDropId?: string } = {}) 
   const publishedDrop = publishedDropId ? drops.find((drop) => drop.id === publishedDropId) ?? null : null;
   const activeLibrary = walletAddress ? libraryByWallet[walletAddress.toLowerCase()] ?? [] : [];
   const creatorDrops = drops.filter((drop) => drop.creatorAddress?.toLowerCase() === walletAddress.toLowerCase());
-  const isSelectedDropCreator = Boolean(
-    selectedDrop?.creatorAddress && walletAddress && selectedDrop.creatorAddress.toLowerCase() === walletAddress.toLowerCase()
-  );
   const prioritizedDrops = [...drops].sort(compareAdminFeaturedDrops);
   const soldOutDrops = prioritizedDrops.filter((drop) => drop.status === "sold-out" || drop.minted >= drop.edition).slice(0, 4);
   const soldOutCount = creatorDrops.filter((drop) => drop.status === "sold-out" && drop.edition >= TOKEN_UNLOCK_MIN_EDITION).length;
   const tokenEligibility = getCreatorTokenEligibility(drops, walletAddress);
   const isPlatformAdmin = walletAddress.toLowerCase() === PLATFORM_WALLET.toLowerCase();
-  const liveDrops = prioritizedDrops.filter((drop) => drop.tokenId && drop.minted < drop.edition);
-  const featuredDrops = (liveDrops.length ? liveDrops : prioritizedDrops).slice(0, 3);
+  const liveDrops = prioritizedDrops.filter((drop) => drop.tokenId && drop.status === "live" && drop.minted < drop.edition);
+  const featuredDrops = (liveDrops.length ? liveDrops : prioritizedDrops).filter(isPresentationReady).slice(0, 3);
   const collectionDrops = [...prioritizedDrops]
-    .filter((drop) => drop.tokenId)
-    .sort((left, right) => compareAdminFeaturedDrops(left, right) || right.minted / Math.max(right.edition, 1) - left.minted / Math.max(left.edition, 1))
+    .filter((drop) => drop.tokenId && isPresentationReady(drop))
+    .sort((left, right) => right.minted - left.minted)
     .slice(0, 4);
 
   useEffect(() => {
@@ -322,10 +325,12 @@ export function DroproomApp({ initialDropId }: { initialDropId?: string } = {}) 
   async function loadDrops() {
     try {
       setDropsLoading(true);
+      setDropsError(false);
       const requestedDropId = initialDropId ?? new URLSearchParams(window.location.search).get("drop");
       const endpoint = requestedDropId ? `/api/drops?drop=${encodeURIComponent(requestedDropId)}` : "/api/drops";
       const response = await fetch(endpoint, { cache: "no-store" });
       const payload = (await response.json()) as { drops?: Drop[]; error?: string };
+      if (!response.ok) throw new Error(payload.error ?? "Live drops are temporarily unavailable.");
       const nextDrops = (payload.drops ?? [])
         .filter((drop) => isVisibleDropId(drop.tokenId ?? drop.id) && !isAdminHiddenDrop(drop))
         .sort(compareAdminFeaturedDrops);
@@ -344,6 +349,7 @@ export function DroproomApp({ initialDropId }: { initialDropId?: string } = {}) 
         setNotice(payload.error);
       }
     } catch {
+      setDropsError(true);
       setNotice("Live drops could not be loaded yet.");
     } finally {
       setDropsLoading(false);
@@ -542,18 +548,19 @@ export function DroproomApp({ initialDropId }: { initialDropId?: string } = {}) 
 
   function shareCreatedDrop(drop: Drop, network: "x" | "farcaster" | "reddit") {
     const shareData = buildShareData(drop);
+    const intent = walletAddress && drop.creatorAddress?.toLowerCase() === walletAddress.toLowerCase() ? "created" : "collect";
 
     if (network === "x") {
-      shareOnX(shareData, "created");
+      shareOnX(shareData, intent);
       return;
     }
 
     if (network === "farcaster") {
-      shareOnFarcaster(shareData, "created");
+      shareOnFarcaster(shareData, intent);
       return;
     }
 
-    shareOnReddit(shareData, "created");
+    shareOnReddit(shareData, intent);
   }
 
   function beginCreate(mode: StartMode) {
@@ -565,14 +572,14 @@ export function DroproomApp({ initialDropId }: { initialDropId?: string } = {}) 
     setNotice("");
     setDraft({
       ...defaultDraft,
-      title: mode === "blank" ? "Blank Canvas Drop" : mode === "ai" ? "AI Artwork Drop" : "Uploaded Artwork Drop",
+      title: "",
       image: mode === "blank" ? createBlankArtwork("BLANK CANVAS") : ""
     });
 
     if (mode === "blank") {
       setDraft((current) => ({
         ...current,
-        title: "Blank Canvas Drop",
+        title: "",
         image: createBlankArtwork("BLANK CANVAS", current.background)
       }));
     }
@@ -595,7 +602,6 @@ export function DroproomApp({ initialDropId }: { initialDropId?: string } = {}) 
     reader.onload = () => {
       setDraft((current) => ({
         ...current,
-        title: file.name.replace(/\.[^/.]+$/, "").slice(0, 48) || "Uploaded Artwork",
         image: String(reader.result)
       }));
       setNotice("Artwork uploaded. You can refine the drop before publishing.");
@@ -644,7 +650,7 @@ export function DroproomApp({ initialDropId }: { initialDropId?: string } = {}) 
       description: "A limited AI-assisted image drop created on Droproom.",
       image
     }));
-    setCreateStep("review");
+    setCreateStep("studio");
   }
 
   async function publishDrop() {
@@ -652,12 +658,16 @@ export function DroproomApp({ initialDropId }: { initialDropId?: string } = {}) 
 
     try {
       setPublishPending(true);
-      setNotice("Preparing your wallet on Base...");
-      if (!walletAddress) {
-        await droproom.connect();
-      } else {
-        await droproom.ensureBaseChain();
+      if (draft.title.trim().length < 3 || /^untitled(?: drop)?$/i.test(draft.title.trim())) {
+        throw new Error("Give your drop a name of at least 3 characters before publishing.");
       }
+      if (draft.description.trim().length < 10) {
+        throw new Error("Add a short description of at least 10 characters so collectors know what they’re minting.");
+      }
+      setNotice("Preparing your wallet on Base...");
+      const publisher = await droproom.connect();
+      setNotice("Checking your existing drops on Base...");
+      await assertCreatorCanPublish(publisher);
 
       setNotice("Uploading artwork to IPFS...");
       const title = draft.title.trim() || "Untitled Drop";
@@ -758,14 +768,15 @@ export function DroproomApp({ initialDropId }: { initialDropId?: string } = {}) 
       setNotice("This drop is not connected to an onchain token yet.");
       return;
     }
-    if (mintPending || targetDrop.minted >= targetDrop.edition || activeLibrary.includes(targetDrop.id)) return;
+    if (mintPending || targetDrop.status !== "live" || targetDrop.minted >= targetDrop.edition || activeLibrary.includes(targetDrop.id)) return;
 
     try {
       setMintPending(true);
-      const mintWallet = walletAddress ?? (await droproom.connect());
       setNotice("Confirm the mint in your wallet. Free mint means price is 0; Base gas is still paid by you.");
       const result = await droproom.mintDrop({ tokenId: targetDrop.tokenId, quantity: 1 });
       const mintedEvent = result.events.minted[0];
+      if (!mintedEvent) throw new Error("The mint event could not be confirmed. Check your transaction before trying again.");
+      const mintWallet = mintedEvent.collector;
       const paidWei = mintedEvent?.paid?.toString() ?? targetDrop.priceWei ?? "0";
 
       const minted = mintedEvent ? Number(mintedEvent.totalMinted) : Math.min(targetDrop.minted + 1, targetDrop.edition);
@@ -923,6 +934,8 @@ export function DroproomApp({ initialDropId }: { initialDropId?: string } = {}) 
             activeLibrary={activeLibrary}
             drops={prioritizedDrops}
             dropsLoading={dropsLoading}
+            dropsError={dropsError}
+            onRetry={() => void loadDrops()}
             isMinting={mintPending}
             onCreate={() => setActiveView("create")}
             onMint={(drop) => void mintSelectedDrop(drop)}
@@ -936,12 +949,12 @@ export function DroproomApp({ initialDropId }: { initialDropId?: string } = {}) 
           {selectedDrop ? (
             <section className="section-wrap detail-section" id="drop-detail">
               <DropDetail
-                canShare={isSelectedDropCreator}
+                canShare
                 drop={selectedDrop}
                 isMinting={mintPending}
                 isOwned={activeLibrary.includes(selectedDrop.id)}
                 isWalletConnected={Boolean(walletAddress)}
-                onCopyLink={() => void copyDropLink(selectedDrop, "Creator link copied.")}
+                onCopyLink={() => void copyDropLink(selectedDrop, "Drop link copied.")}
                 onMint={() => void mintSelectedDrop(selectedDrop)}
                 onShareFarcaster={() => shareCreatedDrop(selectedDrop, "farcaster")}
                 onShareReddit={() => shareCreatedDrop(selectedDrop, "reddit")}
@@ -959,6 +972,7 @@ export function DroproomApp({ initialDropId }: { initialDropId?: string } = {}) 
 
       {view === "create" ? (
         <section className="screen create-screen page-view">
+          <CreatorGateNotice account={droproom.account} />
           <CreateFlow
             aiImages={aiImages}
             aiLoading={aiLoading}
@@ -1244,29 +1258,21 @@ function MarketplaceHero({
             Now live on Base
           </div>
           <h1>
-            Create.
+            Make it.
             <br />
-            <span>Drop.</span>
+            <span>Drop it.</span>
             <br />
-            Collect.
+            Collect it.
           </h1>
           <p>
-            Launch limited NFT collections on Base in minutes. No code. No friction. Just clean minting, real IPFS media,
-            and collector-ready sharing.
+            Turn an image or an idea into a limited drop on Base. Find something you like, collect it, and make something of your own.
           </p>
           <div className="hero-actions">
-            <button className="primary-button" onClick={onCreate} type="button">Start Creating</button>
-            <button className="secondary-button" onClick={onExplore} type="button">
-              Explore Drops <span aria-hidden="true">→</span>
-            </button>
+            <button className="primary-button" onClick={onExplore} type="button">Explore drops <span aria-hidden="true">↗</span></button>
+            <button className="secondary-button" onClick={onCreate} type="button">Make your first drop</button>
           </div>
           <div className="creator-proof">
-            <div className="creator-stack" aria-hidden="true">
-              <span />
-              <span />
-              <span />
-            </div>
-            <p>Real Base drops, real wallet minting, no mocked transactions.</p>
+            <p>Browse without a wallet · Free drops available · Network gas applies</p>
           </div>
         </div>
 
@@ -1331,6 +1337,8 @@ function LiveDropsSection({
   activeLibrary,
   drops,
   dropsLoading,
+  dropsError,
+  onRetry,
   isMinting,
   onCreate,
   onMint,
@@ -1340,20 +1348,51 @@ function LiveDropsSection({
   activeLibrary: string[];
   drops: Drop[];
   dropsLoading: boolean;
+  dropsError: boolean;
+  onRetry: () => void;
   isMinting: boolean;
   onCreate: () => void;
   onMint: (drop: Drop) => void;
   onSelect: (id: string) => void;
   selectedDropId: string | null;
 }) {
+  const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState<DiscoveryFilter>("live");
+  const [sort, setSort] = useState<DiscoverySort>("newest");
+  const [limit, setLimit] = useState(12);
+  const results = discoverDrops(drops, query, filter, sort);
+  const filters: { id: DiscoveryFilter; label: string }[] = [
+    { id: "live", label: "Live drops" }, { id: "free", label: "Free mint" },
+    { id: "small", label: "25 editions or less" }, { id: "sold-out", label: "Sold out" }
+  ];
   return (
     <section className="section-wrap live-drops-section" id="drops">
       <div className="section-heading">
         <div>
-          <h2>Live Drops</h2>
-          <p>Limited collections minting right now on Base.</p>
+          <p className="eyebrow">Find your next collectible</p>
+          <h2>Inside the room</h2>
+          <p>Explore drops from the community. Find one that feels like you.</p>
         </div>
         <button className="text-link" onClick={onCreate} type="button">Create a drop ↗</button>
+      </div>
+
+      <div className="discovery-toolbar">
+        <label className="discovery-search">
+          <span className="sr-only">Search drops</span>
+          <input type="search" placeholder="Search drops, wallets or token IDs" value={query} onChange={(event) => { setQuery(event.target.value); setLimit(12); }} />
+        </label>
+        <label className="discovery-sort">
+          <span>Sort by</span>
+          <select value={sort} onChange={(event) => { setSort(event.target.value as DiscoverySort); setLimit(12); }}>
+            <option value="newest">Newest</option><option value="collected">Most minted</option><option value="remaining">Fewest left</option>
+          </select>
+        </label>
+      </div>
+      <div className="discovery-filter-row">
+        <div className="discovery-filters" aria-label="Filter drops">
+          {filters.map((item) => <button key={item.id} type="button" className={filter === item.id ? "chip active" : "chip"} aria-pressed={filter === item.id} onClick={() => { setFilter(item.id); setLimit(12); }}>{item.label}</button>)}
+        </div>
+        <span className="discovery-count" role="status">{dropsLoading ? "Loading drops…" : `${results.length} ${results.length === 1 ? "drop" : "drops"}`}</span>
       </div>
 
       {dropsLoading ? (
@@ -1362,9 +1401,16 @@ function LiveDropsSection({
             <div className="market-drop-card skeleton" key={item} />
           ))}
         </div>
-      ) : drops.length ? (
+      ) : dropsError ? (
+        <div className="discovery-empty" role="alert">
+          <h3>The room is taking a moment.</h3>
+          <p>We couldn’t load the live drops. Please try again.</p>
+          <button type="button" className="secondary-button" onClick={onRetry}>Retry loading drops</button>
+        </div>
+      ) : results.length ? (
+        <>
         <div className="drop-card-grid">
-          {drops.map((drop) => (
+          {results.slice(0, limit).map((drop) => (
             <LiveDropCard
               drop={drop}
               isMinting={isMinting}
@@ -1375,6 +1421,14 @@ function LiveDropsSection({
               onSelect={() => onSelect(drop.id)}
             />
           ))}
+        </div>
+        {results.length > limit ? <button className="secondary-button load-more" type="button" onClick={() => setLimit((value) => value + 12)}>Show more drops ({results.length - limit} left)</button> : null}
+        </>
+      ) : drops.length ? (
+        <div className="discovery-empty">
+          <h3>No drops match just yet.</h3>
+          <p>Try another name or explore all live drops.</p>
+          <button type="button" className="secondary-button" onClick={() => { setQuery(""); setFilter("live"); setLimit(12); }}>Reset filters</button>
         </div>
       ) : (
         <GenesisEmptyState onCreate={onCreate} />
@@ -1491,8 +1545,8 @@ function CollectionsSection({ drops, onSelect }: { drops: Drop[]; onSelect: (id:
     <section className="section-wrap collections-section" id="collections">
       <div className="section-heading">
         <div>
-          <h2>Trending Collections</h2>
-          <p>Most active Droproom drops from the live index.</p>
+          <h2>Community favorites</h2>
+          <p>Named collections, ordered by editions minted.</p>
         </div>
       </div>
       {drops.length ? (
@@ -1531,7 +1585,7 @@ function MarketplaceFooter() {
           </span>
           <span>Droproom</span>
         </div>
-        <p>The curated launchpad for limited NFT drops on Base. Built for creators who value quality over noise.</p>
+        <p>A place to make, discover and collect limited NFT drops on Base.</p>
         <a className="footer-social-link" href={droproomXUrl} rel="noreferrer" target="_blank">
           Follow {droproomXHandle}
         </a>
@@ -1656,8 +1710,8 @@ function DropDetail({
         <div className="progress-track">
           <span style={{ width: `${progress}%` }} />
         </div>
-        <button className="primary-button wide" disabled={soldOut || isOwned || isMinting} onClick={onMint} type="button">
-          {soldOut ? "Sold out" : isOwned ? "Collected" : isMinting ? "Minting..." : isWalletConnected ? "Mint on Base" : "Connect Base Wallet"} <span>Base</span>
+        <button className="primary-button wide" disabled={drop.status !== "live" || soldOut || isOwned || isMinting} onClick={onMint} type="button">
+          {soldOut ? "Sold out" : drop.status !== "live" ? "Mint unavailable" : isOwned ? "Collected" : isMinting ? "Minting..." : isWalletConnected ? "Mint on Base" : "Connect Base Wallet"} <span>Base</span>
         </button>
         <p className="microcopy">
           Free mint means NFT price is 0. Network gas is paid by your connected Base Account.
@@ -1674,8 +1728,8 @@ function DropDetail({
           <div className="drop-share">
             <div className="drop-share-row">
               <div>
-                <strong>Share your live drop</strong>
-                <p>Only creators see these share tools for their own drop.</p>
+                <strong>Pass it on</strong>
+                <p>Share this collection with someone who would love it.</p>
               </div>
               <button className="secondary-button" onClick={onCopyLink} type="button">
                 Copy link
@@ -1813,8 +1867,8 @@ function CreateFlow(props: {
       <section className="create-start">
         <div>
           <p className="eyebrow">Create NFT</p>
-          <h1>Start from the strongest path for your drop.</h1>
-          <p>Keep it simple: image or short looping GIF, limited editions, free or paid minting, and a clean onchain review before publish.</p>
+          <h1>Your idea. Your first drop.</h1>
+          <p>Upload a favorite image, design a card, or try AI. Start with 10 editions and make it yours.</p>
         </div>
         <CreatorPolicyNotice />
         <div className="start-grid">
@@ -1898,11 +1952,11 @@ function CreateFlow(props: {
 
         <label className="field">
           <span>Title</span>
-          <input onChange={(event) => props.onUpdateDraft((current) => ({ ...current, title: event.target.value }))} value={props.draft.title} />
+          <input maxLength={64} placeholder="Give your drop a name" onChange={(event) => props.onUpdateDraft((current) => ({ ...current, title: event.target.value, image: props.startMode === "blank" ? createBlankArtwork(current.overlayText || event.target.value, current.background) : current.image }))} value={props.draft.title} />
         </label>
         <label className="field">
           <span>Description</span>
-          <textarea onChange={(event) => props.onUpdateDraft((current) => ({ ...current, description: event.target.value }))} value={props.draft.description} />
+          <textarea maxLength={1000} placeholder="What makes this drop yours?" onChange={(event) => props.onUpdateDraft((current) => ({ ...current, description: event.target.value }))} value={props.draft.description} />
         </label>
         {props.startMode === "blank" ? (
           <>
@@ -1913,7 +1967,7 @@ function CreateFlow(props: {
                   props.onUpdateDraft((current) => ({
                     ...current,
                     background: event.target.value,
-                    image: createBlankArtwork(current.title, event.target.value)
+                    image: createBlankArtwork(current.overlayText || current.title, event.target.value)
                   }))
                 }
                 type="color"
@@ -1923,24 +1977,27 @@ function CreateFlow(props: {
             <label className="field">
               <span>Card label</span>
               <input
-                onChange={(event) => props.onUpdateDraft((current) => ({ ...current, overlayText: event.target.value }))}
+                onChange={(event) => props.onUpdateDraft((current) => ({ ...current, overlayText: event.target.value, image: createBlankArtwork(event.target.value || current.title, current.background) }))}
                 placeholder="Optional text on the artwork"
                 value={props.draft.overlayText}
               />
             </label>
           </>
         ) : null}
+        <div className="edition-presets" role="group" aria-label="Choose edition size">
+          {[1, 10, 25, 99].map((size) => <button type="button" key={size} className={props.draft.edition === size ? "chip active" : "chip"} aria-pressed={props.draft.edition === size} onClick={() => props.onUpdateDraft((current) => ({ ...current, edition: size }))}>{size === 1 ? "1 of 1" : `${size} editions`}</button>)}
+        </div>
         <div className="field-row">
           <label className="field">
             <span>Edition</span>
             <input
               max={EDITION_MAX}
               min={1}
-              onChange={(event) => props.onUpdateDraft((current) => ({ ...current, edition: Math.min(Math.max(safeNumber(event.target.value, 99), 1), EDITION_MAX) }))}
+              onChange={(event) => props.onUpdateDraft((current) => ({ ...current, edition: Math.min(Math.max(Math.round(safeNumber(event.target.value, 10)), 1), EDITION_MAX) }))}
               type="number"
               value={props.draft.edition}
             />
-            <small>Maximum {EDITION_MAX}. Smaller editions often feel more collectible.</small>
+            <small>Start small. This drop must sell out before you can publish another. Maximum {EDITION_MAX}.</small>
           </label>
           <label className="field">
             <span>Price</span>
@@ -1948,7 +2005,7 @@ function CreateFlow(props: {
               disabled={props.draft.isFree}
               min={0}
               onChange={(event) => props.onUpdateDraft((current) => ({ ...current, price: safeNumber(event.target.value, 0) }))}
-              step="0.01"
+              step="0.0001"
               type="number"
               value={props.draft.price}
             />
@@ -1958,11 +2015,12 @@ function CreateFlow(props: {
         <button className={props.draft.isFree ? "toggle active" : "toggle"} onClick={() => props.onUpdateDraft((current) => ({ ...current, isFree: !current.isFree, price: current.isFree ? 0.01 : 0 }))} type="button">
           {props.draft.isFree ? "Free mint" : `Paid mint (${PLATFORM_FEE_PERCENT}% fee)`}
         </button>
-        <button className="primary-button wide" disabled={!props.hasArtwork} onClick={() => props.onStep("review")} type="button">
+        <button className="primary-button wide" disabled={!props.hasArtwork || props.draft.title.trim().length < 3 || props.draft.description.trim().length < 10} onClick={() => props.onStep("review")} type="button">
           Review drop <span>→</span>
         </button>
         <CreatorPolicyNotice compact />
         {!props.hasArtwork ? <p className="microcopy">Add artwork, choose a blank canvas, or select an AI variation before review.</p> : null}
+        {props.hasArtwork && (props.draft.title.trim().length < 3 || props.draft.description.trim().length < 10) ? <p className="microcopy">Add a title (3+ characters) and a short description (10+ characters) to continue.</p> : null}
       </div>
 
       <div className="preview-stage">
@@ -1992,7 +2050,6 @@ function LivePreview({ draft }: { draft: StudioDraft }) {
         ) : (
           <div className="preview-empty">Awaiting artwork</div>
         )}
-        {draft.overlayText ? <span>{draft.overlayText}</span> : null}
       </div>
       <div className="preview-copy">
         <p className="eyebrow">Drop preview</p>
@@ -2001,7 +2058,7 @@ function LivePreview({ draft }: { draft: StudioDraft }) {
         <div className="stat-row">
             <span>{draft.isFree ? "Free" : `${draft.price} ETH`}</span>
             <span>{draft.edition} editions</span>
-            <span>{draft.edition >= TOKEN_UNLOCK_MIN_EDITION ? "Unlock eligible" : "Below unlock minimum"}</span>
+            <span>On Base</span>
         </div>
       </div>
     </div>
@@ -2039,8 +2096,8 @@ function ReviewStep({
             <strong>{draft.isFree ? "0%" : `${PLATFORM_FEE_PERCENT}%`}</strong>
           </li>
           <li>
-            <span>Token eligibility</span>
-            <strong>{draft.edition >= TOKEN_UNLOCK_MIN_EDITION ? "Can qualify after sold out + review" : `Needs ${TOKEN_UNLOCK_MIN_EDITION}+ editions`}</strong>
+            <span>Network fee</span>
+            <strong>Shown by your wallet before confirmation</strong>
           </li>
         </ul>
         <CreatorPolicyNotice compact />
@@ -2061,10 +2118,9 @@ function ReviewStep({
 function CreatorPolicyNotice({ compact = false }: { compact?: boolean }) {
   return (
     <div className={compact ? "creator-policy-notice compact" : "creator-policy-notice"}>
-      <strong>Creator quality rule</strong>
+      <strong>One unfinished drop per wallet</strong>
       <span>
-        Keep one active drop at a time. Publishing a second or third drop before your current drop sells out may cause duplicate
-        active drops to be hidden by admin review.
+        Your current drop must sell out before you publish another. You can always prepare your next draft.
       </span>
     </div>
   );

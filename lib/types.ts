@@ -1,6 +1,6 @@
 export type StartMode = "upload" | "blank" | "ai";
 
-export type DropStatus = "draft" | "live" | "sold-out" | "review-pending";
+export type DropStatus = "draft" | "live" | "sold-out" | "review-pending" | "paused";
 
 export type Drop = {
   id: string;

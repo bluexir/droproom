@@ -1,0 +1,43 @@
+/* Discovery and creation refinements; keep the existing Droproom artwork and palette. */
+.market-hero { min-height: 660px; padding-bottom: 40px; }
+.hero-copy h1 { font-size: clamp(3.5rem, 7.5vw, 6.8rem); letter-spacing: -.065em; }
+.hero-copy > p { max-width: 470px; color: #b8c3d6; line-height: 1.75; }
+.creator-proof p { color: #a9b6ca; font-size: .8rem; }
+.section-heading .eyebrow { margin-bottom: 10px; color: #8dafff; font-size: .7rem; }
+.discovery-toolbar { display: flex; gap: 16px; margin: 26px 0 18px; }
+.discovery-search { flex: 1; }
+.discovery-search input, .discovery-sort select { min-height: 50px; border: 1px solid #303649; border-radius: 12px; background: #10131d; color: var(--text); padding: 12px 16px; }
+.discovery-search input { width: 100%; }
+.discovery-search input::placeholder { color: #9caac0; }
+.discovery-sort { display: flex; gap: 12px; align-items: center; color: #a9b6ca; font-size: .85rem; }
+.discovery-filter-row { display: flex; justify-content: space-between; gap: 16px; align-items: center; margin-bottom: 26px; }
+.discovery-filters, .edition-presets { display: flex; flex-wrap: wrap; gap: 8px; }
+.discovery-filters .chip { min-height: 42px; }
+.discovery-count { flex-shrink: 0; color: #a9b6ca; font-size: .85rem; }
+.load-more { display: block; margin: 32px auto 0; }
+.discovery-empty { padding: 60px 20px; text-align: center; border: 1px dashed #303649; border-radius: 20px; }
+.discovery-empty p { color: #a9b6ca; margin-bottom: 24px; }
+.creator-gate { display: flex; gap: 24px; justify-content: space-between; align-items: center; padding: 22px 24px; margin-bottom: 28px; border: 1px solid #304569; border-radius: 18px; background: linear-gradient(100deg, #10213b, #10131d); }
+.creator-gate strong { display: block; margin: 8px 0; font-size: 1.05rem; }
+.creator-gate p { color: #b8c3d6; max-width: 660px; margin: 0; line-height: 1.65; font-size: .88rem; }
+.creator-gate .secondary-button { flex-shrink: 0; }
+.edition-presets { margin: 22px 0 12px; }
+.market-drop-title strong, .collection-card strong { overflow-wrap: anywhere; }
+.drop-share { margin-top: 24px; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid #9dbdff; outline-offset: 4px; }
+@media (max-width: 680px) {
+  .market-hero { min-height: auto; }
+  .hero-copy h1 { font-size: clamp(3.5rem, 14vw, 5rem); }
+  .discovery-toolbar { flex-direction: column; gap: 10px; }
+  .discovery-sort { justify-content: space-between; }
+  .discovery-sort select { flex: 1; max-width: 210px; }
+  .discovery-filter-row { align-items: flex-start; flex-direction: column; }
+  .discovery-filters .chip { font-size: .78rem; padding: 10px 12px; }
+  .creator-gate { flex-direction: column; align-items: flex-start; padding: 18px; }
+  .drop-card-actions { grid-template-columns: 1fr 1fr; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}
