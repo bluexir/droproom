@@ -9,6 +9,7 @@ import { ipfsUriToGatewayUrl } from "@/lib/ipfs";
 import { verifyDropCreatedTx } from "@/lib/server/chain-events";
 import { supabaseRest } from "@/lib/server/supabase-rest";
 import type { Drop } from "@/lib/types";
+import { GENESIS_TOKEN_ID } from "@/lib/genesis";
 
 export const runtime = "nodejs";
 
@@ -79,6 +80,11 @@ export async function GET(request: Request) {
       console.error("Recent drop fetch failed", error);
     }
 
+    // Keep Genesis discoverable even when it falls outside the newest 60 rows.
+    if (!rows.some((row) => row.token_id === GENESIS_TOKEN_ID)) {
+      const genesisRow = await readRequestedDropRow(GENESIS_TOKEN_ID, rows);
+      if (genesisRow) rows.push(genesisRow);
+    }
     const visibleRows = rows.filter(isPublicDropRow);
     const syncedRows = await Promise.all(visibleRows.map(syncRowWithChain));
     const requestedDbRow = requestedDropId ? await readRequestedDropRow(requestedDropId, rows) : null;

@@ -1,5 +1,6 @@
 import { PLATFORM_WALLET } from "@/lib/constants";
 import type { Drop } from "@/lib/types";
+import { compareGenesisFirst } from "@/lib/genesis";
 
 export const ADMIN_HIDDEN_DROP_STATUS = "review-pending" satisfies Drop["status"];
 
@@ -16,6 +17,8 @@ export function isPlatformDrop(drop: Pick<Drop, "creatorAddress">) {
 }
 
 export function compareAdminFeaturedDrops(left: Drop, right: Drop) {
+  const genesisPriority = compareGenesisFirst(left, right);
+  if (genesisPriority) return genesisPriority;
   const platformPriority = Number(isPlatformDrop(right)) - Number(isPlatformDrop(left));
   if (platformPriority) return platformPriority;
 

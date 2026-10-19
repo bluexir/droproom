@@ -1,18 +1,23 @@
 import type { Drop } from "./types";
+import { compareGenesisFirst } from "./genesis";
 
-export type DiscoveryFilter = "live" | "free" | "small" | "sold-out";
+export type DiscoveryFilter = "live" | "free" | "small" | "sold-out" | "saved";
 export type DiscoverySort = "newest" | "collected" | "remaining";
 
-export function discoverDrops(drops: Drop[], query: string, filter: DiscoveryFilter, sort: DiscoverySort) {
+export function discoverDrops(drops: Drop[], query: string, filter: DiscoveryFilter, sort: DiscoverySort, saved: string[] = []) {
   const search = query.trim().toLocaleLowerCase();
   return drops.filter((drop) => {
     if (!drop.tokenId || drop.status === "review-pending" || drop.status === "draft") return false;
     const soldOut = drop.minted >= drop.edition || drop.status === "sold-out";
-    if (filter === "sold-out" ? !soldOut : soldOut || drop.status !== "live") return false;
+    if (filter === "saved") {
+      if (!saved.includes(drop.id)) return false;
+    } else if (filter === "sold-out" ? !soldOut : soldOut || drop.status !== "live") return false;
     if (filter === "free" && !drop.isFree) return false;
     if (filter === "small" && drop.edition > 25) return false;
     return !search || [drop.title, drop.creator, drop.creatorAddress, drop.tokenId].some((value) => value?.toLocaleLowerCase().includes(search));
   }).sort((a, b) => {
+    const pinned = compareGenesisFirst(a, b);
+    if (pinned) return pinned;
     if (sort === "collected") return b.minted - a.minted || compareNewest(a, b);
     if (sort === "remaining") return (a.edition - a.minted) - (b.edition - b.minted) || compareNewest(a, b);
     return compareNewest(a, b);

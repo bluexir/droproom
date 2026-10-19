@@ -6,6 +6,9 @@ import { parseEther } from "viem";
 
 import { MintSuccessModal } from "@/components/MintSuccessModal";
 import { CreatorGateNotice } from "@/components/CreatorGateNotice";
+import { DropDialog, RoomDock, RoomHero, RoomIcon } from "@/components/RoomExperience";
+import { compareGenesisFirst, isGenesisDrop } from "@/lib/genesis";
+import { CARD_TEMPLATES, createCardArtwork } from "@/lib/card-artwork";
 import { assertCreatorCanPublish } from "@/lib/contract/creator-gate";
 import { discoverDrops, isPresentationReady, type DiscoveryFilter, type DiscoverySort } from "@/lib/discovery";
 import {
@@ -59,6 +62,7 @@ type DropModerationAdminResult = {
 type DropModerationAdminRequester = (input: DropModerationAdminInput) => Promise<DropModerationAdminResult>;
 
 const libraryKey = "droproom:library:v1";
+const savedKey = "droproom:saved:v1";
 const brandIconPrimary = "/brand/logo.png";
 const droproomXHandle = "@droproombase";
 const droproomXUrl = "https://x.com/droproombase";
@@ -67,40 +71,15 @@ const defaultDraft: StudioDraft = {
   title: "",
   description: "",
   image: "",
-  background: "#07111f",
-  frame: "clean",
+  background: "#153be8",
+  frame: "orbit",
   overlayText: "",
   edition: 10,
   price: 0,
   isFree: true
 };
 
-function createBlankArtwork(title = "DROPROOM", background = "#07111f") {
-  const label = (title.trim() || "YOUR DROP").slice(0, 18).toUpperCase()
-    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-  const svg = `<svg width="1200" height="1200" viewBox="0 0 1200 1200" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <rect width="1200" height="1200" rx="116" fill="${background}"/>
-    <rect x="88" y="88" width="1024" height="1024" rx="86" fill="url(#card)" stroke="rgba(255,255,255,.24)" stroke-width="3"/>
-    <circle cx="812" cy="266" r="360" fill="#31F3E9" opacity=".18"/>
-    <circle cx="338" cy="914" r="420" fill="#196DFF" opacity=".2"/>
-    <path d="M320 410H880C917.555 410 948 440.445 948 478V736C948 773.555 917.555 804 880 804H320C282.445 804 252 773.555 252 736V478C252 440.445 282.445 410 320 410Z" fill="rgba(255,255,255,.065)" stroke="rgba(255,255,255,.24)" stroke-width="3"/>
-    <path d="M388 720L524 586L620 676L706 592L838 720" stroke="white" stroke-width="28" stroke-linecap="round" stroke-linejoin="round" opacity=".82"/>
-    <circle cx="802" cy="504" r="42" fill="white" opacity=".84"/>
-    <path d="M600 208L780 312V520L600 624L420 520V312L600 208Z" stroke="#31F3E9" stroke-width="18" opacity=".8"/>
-    <path d="M600 276L674 402H526L600 276Z" fill="white" opacity=".88"/>
-    <text x="600" y="930" text-anchor="middle" fill="white" font-family="Verdana, Arial, sans-serif" font-size="46" font-weight="700" letter-spacing="9">${label}</text>
-    <text x="600" y="990" text-anchor="middle" fill="#8BF5FF" font-family="Verdana, Arial, sans-serif" font-size="24" font-weight="700" letter-spacing="8">LIMITED BASE DROP</text>
-    <defs>
-      <radialGradient id="card" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(770 250) rotate(120) scale(980)">
-        <stop stop-color="#26F0E4"/>
-        <stop offset=".48" stop-color="#1575FF" stop-opacity=".42"/>
-        <stop offset="1" stop-color="#07111F" stop-opacity=".96"/>
-      </radialGradient>
-    </defs>
-  </svg>`;
-
-  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
-}
+const createBlankArtwork = createCardArtwork;
 
 function shortAddress(address?: string) {
   if (!address) return "Connect";
@@ -178,6 +157,7 @@ export function DroproomApp({ initialDropId }: { initialDropId?: string } = {}) 
   const [drops, setDrops] = useState<Drop[]>([]);
   const [libraryByWallet, setLibraryByWallet] = useState<Record<string, string[]>>({});
   const [selectedDropId, setSelectedDropId] = useState<string | null>(null);
+  const [savedDrops, setSavedDrops] = useState<string[]>([]);
   const [aiPrompt, setAiPrompt] = useState("");
   const [styleChip, setStyleChip] = useState<StyleChipId>("premium");
   const [aiImages, setAiImages] = useState<string[]>([]);
@@ -198,7 +178,6 @@ export function DroproomApp({ initialDropId }: { initialDropId?: string } = {}) 
   } | null>(null);
   const [dropsLoading, setDropsLoading] = useState(true);
   const [dropsError, setDropsError] = useState(false);
-  const [shouldFocusInitialDrop, setShouldFocusInitialDrop] = useState(Boolean(initialDropId));
   const swipeStartRef = useRef<{ x: number; y: number } | null>(null);
   const hasArtwork = Boolean(draft.image);
   const walletAddress = droproom.account ?? "";
@@ -206,6 +185,10 @@ export function DroproomApp({ initialDropId }: { initialDropId?: string } = {}) 
   useEffect(() => {
     const savedLibrary = parseLibrary(window.localStorage.getItem(libraryKey));
     setLibraryByWallet(savedLibrary);
+    try {
+      const saved = JSON.parse(window.localStorage.getItem(savedKey) ?? "[]");
+      if (Array.isArray(saved)) setSavedDrops(saved.filter((id): id is string => typeof id === "string"));
+    } catch { /* Saving is optional; browsing still works if storage is unavailable. */ }
     void loadDrops();
     // loadDrops is intentionally kept as the page bootstrap routine; initialDropId is the only route input it needs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -215,40 +198,33 @@ export function DroproomApp({ initialDropId }: { initialDropId?: string } = {}) 
     safeStorageSet(libraryKey, libraryByWallet);
   }, [libraryByWallet]);
 
-  useEffect(() => {
-    if (!initialDropId) return;
-
-    setShouldFocusInitialDrop(true);
-  }, [initialDropId]);
-
-  const selectedDrop = drops.find((drop) => drop.id === selectedDropId) ?? drops[0];
+  const selectedDrop = drops.find((drop) => drop.id === selectedDropId);
   const publishedDrop = publishedDropId ? drops.find((drop) => drop.id === publishedDropId) ?? null : null;
   const activeLibrary = walletAddress ? libraryByWallet[walletAddress.toLowerCase()] ?? [] : [];
   const creatorDrops = drops.filter((drop) => drop.creatorAddress?.toLowerCase() === walletAddress.toLowerCase());
   const prioritizedDrops = [...drops].sort(compareAdminFeaturedDrops);
-  const soldOutDrops = prioritizedDrops.filter((drop) => drop.status === "sold-out" || drop.minted >= drop.edition).slice(0, 4);
   const soldOutCount = creatorDrops.filter((drop) => drop.status === "sold-out" && drop.edition >= TOKEN_UNLOCK_MIN_EDITION).length;
   const tokenEligibility = getCreatorTokenEligibility(drops, walletAddress);
   const isPlatformAdmin = walletAddress.toLowerCase() === PLATFORM_WALLET.toLowerCase();
-  const liveDrops = prioritizedDrops.filter((drop) => drop.tokenId && drop.status === "live" && drop.minted < drop.edition);
-  const featuredDrops = (liveDrops.length ? liveDrops : prioritizedDrops).filter(isPresentationReady).slice(0, 3);
+  const genesisDrop = prioritizedDrops.find(isGenesisDrop);
   const collectionDrops = [...prioritizedDrops]
-    .filter((drop) => drop.tokenId && isPresentationReady(drop))
-    .sort((left, right) => right.minted - left.minted)
+    .filter((drop) => drop.tokenId && (isGenesisDrop(drop) || isPresentationReady(drop)))
+    .sort((left, right) => compareGenesisFirst(left, right) || right.minted - left.minted)
     .slice(0, 4);
 
-  useEffect(() => {
-    if (!shouldFocusInitialDrop || dropsLoading || !selectedDrop) return;
+  function toggleSavedDrop(id: string) {
+    const next = savedDrops.includes(id) ? savedDrops.filter((item) => item !== id) : [...savedDrops, id];
+    setSavedDrops(next);
+    try { window.localStorage.setItem(savedKey, JSON.stringify(next)); } catch { setNotice("Saved for this visit. Browser storage is unavailable."); }
+  }
 
-    const frame = window.requestAnimationFrame(() => {
-      document.getElementById("drop-detail")?.scrollIntoView({ behavior: "smooth", block: "start" });
-      setShouldFocusInitialDrop(false);
-    });
-
-    return () => window.cancelAnimationFrame(frame);
-  }, [dropsLoading, selectedDrop, shouldFocusInitialDrop]);
+  function closeDrop() {
+    setSelectedDropId(null);
+    window.history.replaceState({}, "", "/");
+  }
 
   function setActiveView(nextView: View, options: { replace?: boolean } = {}) {
+    if (nextView !== "explore") closeDrop();
     if (nextView !== view && !options.replace) {
       setViewHistory((current) => [...current, view].slice(-8));
     }
@@ -256,6 +232,7 @@ export function DroproomApp({ initialDropId }: { initialDropId?: string } = {}) 
     setWalletMenuOpen(false);
     setMobileMenuOpen(false);
     if (nextView === "create") setCreateStep("start");
+    window.scrollTo({ top: 0, behavior: "instant" });
   }
 
   function goBackInApp() {
@@ -270,11 +247,12 @@ export function DroproomApp({ initialDropId }: { initialDropId?: string } = {}) 
     }
 
     if (view === "explore") {
+      if (selectedDropId) { closeDrop(); return; }
       const url = new URL(window.location.href);
       if (url.searchParams.has("drop")) {
         url.searchParams.delete("drop");
         window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
-        setSelectedDropId(drops[0]?.id ?? null);
+        setSelectedDropId(null);
         window.scrollTo({ top: 0, behavior: "smooth" });
       }
       return;
@@ -338,7 +316,7 @@ export function DroproomApp({ initialDropId }: { initialDropId?: string } = {}) 
       setDrops(nextDrops);
       setSelectedDropId((current) => {
         if (requestedDropId) return requestedDrop?.id ?? null;
-        return current ?? nextDrops[0]?.id ?? null;
+        return current;
       });
       if (requestedDrop) {
         window.history.replaceState({}, "", getDropPath(requestedDrop));
@@ -573,14 +551,14 @@ export function DroproomApp({ initialDropId }: { initialDropId?: string } = {}) 
     setDraft({
       ...defaultDraft,
       title: "",
-      image: mode === "blank" ? createBlankArtwork("BLANK CANVAS") : ""
+      image: mode === "blank" ? createBlankArtwork() : ""
     });
 
     if (mode === "blank") {
       setDraft((current) => ({
         ...current,
         title: "",
-        image: createBlankArtwork("BLANK CANVAS", current.background)
+        image: createBlankArtwork("", current.background, current.frame)
       }));
     }
   }
@@ -803,6 +781,7 @@ export function DroproomApp({ initialDropId }: { initialDropId?: string } = {}) 
         mintNumber: minted,
         shareUrl: resolveDropPermalink(updatedDrop)
       });
+      closeDrop();
       setNotice(`Successfully minted on Base. ${updatedDrop.title} is now in your library.`);
       try {
         await saveMint({
@@ -874,9 +853,9 @@ export function DroproomApp({ initialDropId }: { initialDropId?: string } = {}) 
         onDisconnectWallet={disconnectWallet}
         onLibrary={() => setActiveView("library")}
         onOpenCreate={() => setActiveView("create")}
-        onOpenLanding={() => setActiveView("explore")}
+        onOpenLanding={() => { closeDrop(); setActiveView("explore"); }}
         onScrollCollections={() => scrollToLandingSection("collections")}
-        onScrollCreate={() => scrollToLandingSection("create")}
+        onScrollCreate={() => setActiveView("create")}
         onScrollDrops={() => scrollToLandingSection("drops")}
         onSwitchAccount={switchWalletAccount}
         onSwitchBase={() => void droproom.ensureBaseChain()}
@@ -923,15 +902,18 @@ export function DroproomApp({ initialDropId }: { initialDropId?: string } = {}) 
             </section>
           ) : null}
 
-          <MarketplaceHero
-            drops={featuredDrops}
-            dropsLoading={dropsLoading}
+          <RoomHero
+            genesis={genesisDrop}
+            loading={dropsLoading}
+            artwork={genesisDrop ? <ArtworkMedia alt={genesisDrop.title} src={genesisDrop.image} /> : null}
+            onOpen={() => { if (genesisDrop) selectDrop(genesisDrop.id); }}
             onCreate={() => setActiveView("create")}
-            onExplore={() => scrollToLandingSection("drops")}
           />
 
           <LiveDropsSection
             activeLibrary={activeLibrary}
+            savedDrops={savedDrops}
+            onToggleSaved={toggleSavedDrop}
             drops={prioritizedDrops}
             dropsLoading={dropsLoading}
             dropsError={dropsError}
@@ -939,15 +921,13 @@ export function DroproomApp({ initialDropId }: { initialDropId?: string } = {}) 
             isMinting={mintPending}
             onCreate={() => setActiveView("create")}
             onMint={(drop) => void mintSelectedDrop(drop)}
-            onSelect={(id) => {
-              selectDrop(id);
-              document.getElementById("drop-detail")?.scrollIntoView({ behavior: "smooth", block: "start" });
-            }}
+            onSelect={selectDrop}
             selectedDropId={selectedDrop?.id ?? null}
           />
 
           {selectedDrop ? (
-            <section className="section-wrap detail-section" id="drop-detail">
+            <DropDialog title={selectedDrop.title} onClose={closeDrop}>
+              {notice ? <p className="room-dialog-notice" role="status">{notice}</p> : null}
               <DropDetail
                 canShare
                 drop={selectedDrop}
@@ -960,12 +940,11 @@ export function DroproomApp({ initialDropId }: { initialDropId?: string } = {}) 
                 onShareReddit={() => shareCreatedDrop(selectedDrop, "reddit")}
                 onShareX={() => shareCreatedDrop(selectedDrop, "x")}
               />
-            </section>
+            </DropDialog>
           ) : null}
 
-          <CreateCta onCreate={() => setActiveView("create")} onDashboard={() => setActiveView("dashboard")} />
           <CollectionsSection drops={collectionDrops} onSelect={selectDrop} />
-          {soldOutDrops.length ? <SoldOutShowcase drops={soldOutDrops} onSelect={selectDrop} /> : null}
+          <CreateCta onCreate={() => setActiveView("create")} />
           <MarketplaceFooter />
         </>
       ) : null}
@@ -1027,6 +1006,7 @@ export function DroproomApp({ initialDropId }: { initialDropId?: string } = {}) 
           />
         </section>
       ) : null}
+      <RoomDock view={view} onExplore={() => { closeDrop(); setActiveView("explore"); }} onCreate={() => setActiveView("create")} onLibrary={() => setActiveView("library")} />
     </main>
   );
 }
@@ -1089,8 +1069,8 @@ function MarketplaceNav({
         </button>
 
         <nav className="market-links" aria-label="Marketplace navigation">
-          <button onClick={onScrollDrops} type="button">Drops</button>
-          <button onClick={onScrollCollections} type="button">Collections</button>
+          <button onClick={onScrollDrops} type="button">Explore</button>
+          <button onClick={onLibrary} type="button">My collection</button>
           <button onClick={onScrollCreate} type="button">Create</button>
         </nav>
 
@@ -1130,7 +1110,7 @@ function MarketplaceNav({
           <button onClick={onScrollDrops} type="button">Drops</button>
           <button onClick={onScrollCollections} type="button">Collections</button>
           <button onClick={onScrollCreate} type="button">Create</button>
-          <button onClick={onOpenCreate} type="button">Open creator studio</button>
+          <button onClick={onOpenCreate} type="button">Open studio</button>
           <button onClick={onDashboard} type="button">Dashboard</button>
           <button onClick={onLibrary} type="button">Library</button>
           <button onClick={onCloseMobileMenu} type="button">Close</button>
@@ -1238,103 +1218,10 @@ function WalletMenu({
   );
 }
 
-function MarketplaceHero({
-  drops,
-  dropsLoading,
-  onCreate,
-  onExplore
-}: {
-  drops: Drop[];
-  dropsLoading: boolean;
-  onCreate: () => void;
-  onExplore: () => void;
-}) {
-  return (
-    <section className="market-hero">
-      <div className="market-hero-inner">
-        <div className="hero-copy">
-          <div className="live-badge">
-            <span />
-            Now live on Base
-          </div>
-          <h1>
-            Make it.
-            <br />
-            <span>Drop it.</span>
-            <br />
-            Collect it.
-          </h1>
-          <p>
-            Turn an image or an idea into a limited drop on Base. Find something you like, collect it, and make something of your own.
-          </p>
-          <div className="hero-actions">
-            <button className="primary-button" onClick={onExplore} type="button">Explore drops <span aria-hidden="true">↗</span></button>
-            <button className="secondary-button" onClick={onCreate} type="button">Make your first drop</button>
-          </div>
-          <div className="creator-proof">
-            <p>Browse without a wallet · Free drops available · Network gas applies</p>
-          </div>
-        </div>
-
-        <HeroDropStack drops={drops} dropsLoading={dropsLoading} />
-      </div>
-    </section>
-  );
-}
-
-function HeroDropStack({ drops, dropsLoading }: { drops: Drop[]; dropsLoading: boolean }) {
-  const frontDrop = drops[0];
-  const leftDrop = drops.length ? drops[1 % drops.length] : undefined;
-  const rightDrop = drops.length ? drops[2 % drops.length] : undefined;
-
-  return (
-    <div className="hero-card-stage" aria-label="Featured live drops">
-      <div className="hero-card-cloud">
-        <HeroVisualCard drop={leftDrop} loading={dropsLoading} position="left" />
-        <HeroVisualCard drop={rightDrop} loading={dropsLoading} position="right" />
-        <HeroVisualCard drop={frontDrop} loading={dropsLoading} position="front" />
-      </div>
-    </div>
-  );
-}
-
-function HeroVisualCard({ drop, loading, position }: { drop?: Drop; loading: boolean; position: "front" | "left" | "right" }) {
-  const progress = drop ? getDropProgress(drop) : 0;
-
-  return (
-    <article className={`hero-visual-card ${position}${!drop ? " is-empty" : ""}`}>
-      <div className="hero-visual-art">
-        {drop?.image ? (
-          <ArtworkMedia alt={`${drop.title} preview`} src={drop.image} />
-        ) : (
-          <div className="hero-visual-gradient" aria-label={loading ? "Loading live drops" : "Drop preview"} />
-        )}
-        {drop ? (
-          <div className="hero-visual-title">
-            <small>#{drop.tokenId ?? drop.id}</small>
-            <strong>{drop.title}</strong>
-          </div>
-        ) : null}
-      </div>
-      <div className="hero-visual-meta">
-        <div>
-          <small>Price</small>
-          <strong>{drop ? formatDropPrice(drop) : "-"}</strong>
-        </div>
-        <div>
-          <small>Minted</small>
-          <strong>{drop ? `${drop.minted}/${drop.edition}` : "-"}</strong>
-        </div>
-      </div>
-      <div className="progress-track">
-        <span style={{ width: `${progress}%` }} />
-      </div>
-    </article>
-  );
-}
-
 function LiveDropsSection({
   activeLibrary,
+  savedDrops,
+  onToggleSaved,
   drops,
   dropsLoading,
   dropsError,
@@ -1346,6 +1233,8 @@ function LiveDropsSection({
   selectedDropId
 }: {
   activeLibrary: string[];
+  savedDrops: string[];
+  onToggleSaved: (id: string) => void;
   drops: Drop[];
   dropsLoading: boolean;
   dropsError: boolean;
@@ -1360,18 +1249,18 @@ function LiveDropsSection({
   const [filter, setFilter] = useState<DiscoveryFilter>("live");
   const [sort, setSort] = useState<DiscoverySort>("newest");
   const [limit, setLimit] = useState(12);
-  const results = discoverDrops(drops, query, filter, sort);
+  const results = discoverDrops(drops, query, filter, sort, savedDrops);
   const filters: { id: DiscoveryFilter; label: string }[] = [
     { id: "live", label: "Live drops" }, { id: "free", label: "Free mint" },
-    { id: "small", label: "25 editions or less" }, { id: "sold-out", label: "Sold out" }
+    { id: "small", label: "Small editions" }, { id: "sold-out", label: "Sold out" }, { id: "saved", label: `Saved (${savedDrops.length})` }
   ];
   return (
     <section className="section-wrap live-drops-section" id="drops">
       <div className="section-heading">
         <div>
-          <p className="eyebrow">Find your next collectible</p>
-          <h2>Inside the room</h2>
-          <p>Explore drops from the community. Find one that feels like you.</p>
+          <p className="eyebrow">THE COMMUNITY COLLECTION</p>
+          <h2>Fresh in the room<span className="heading-dot">.</span></h2>
+          <p>{filter === "saved" ? "Your shortlist, saved on this browser." : "Genesis first. Then something new to discover."}</p>
         </div>
         <button className="text-link" onClick={onCreate} type="button">Create a drop ↗</button>
       </div>
@@ -1379,7 +1268,7 @@ function LiveDropsSection({
       <div className="discovery-toolbar">
         <label className="discovery-search">
           <span className="sr-only">Search drops</span>
-          <input type="search" placeholder="Search drops, wallets or token IDs" value={query} onChange={(event) => { setQuery(event.target.value); setLimit(12); }} />
+          <RoomIcon name="explore" /><input type="search" placeholder="Find a drop, creator or token…" value={query} onChange={(event) => { setQuery(event.target.value); setLimit(12); }} />
         </label>
         <label className="discovery-sort">
           <span>Sort by</span>
@@ -1397,7 +1286,7 @@ function LiveDropsSection({
 
       {dropsLoading ? (
         <div className="drop-card-grid">
-          {[0, 1, 2].map((item) => (
+          {[0, 1, 2, 3].map((item) => (
             <div className="market-drop-card skeleton" key={item} />
           ))}
         </div>
@@ -1416,6 +1305,8 @@ function LiveDropsSection({
               isMinting={isMinting}
               isOwned={activeLibrary.includes(drop.id)}
               isSelected={drop.id === selectedDropId}
+              isSaved={savedDrops.includes(drop.id)}
+              onToggleSaved={() => onToggleSaved(drop.id)}
               key={drop.id}
               onMint={() => onMint(drop)}
               onSelect={() => onSelect(drop.id)}
@@ -1439,6 +1330,8 @@ function LiveDropsSection({
 
 function LiveDropCard({
   drop,
+  isSaved,
+  onToggleSaved,
   isMinting,
   isOwned,
   isSelected,
@@ -1446,6 +1339,8 @@ function LiveDropCard({
   onSelect
 }: {
   drop: Drop;
+  isSaved: boolean;
+  onToggleSaved: () => void;
   isMinting: boolean;
   isOwned: boolean;
   isSelected: boolean;
@@ -1457,20 +1352,17 @@ function LiveDropCard({
   const progress = getDropProgress(drop);
 
   return (
-    <article className={isSelected ? "market-drop-card selected" : "market-drop-card"}>
+    <article className={`market-drop-card${isSelected ? " selected" : ""}${isGenesisDrop(drop) ? " genesis-pinned" : ""}`} data-token-id={drop.tokenId}>
       <button className="market-drop-art" onClick={onSelect} type="button">
         <ArtworkMedia alt={drop.title} src={drop.image} />
         <span className={soldOut ? "drop-state sold" : "drop-state live"}>
           <i />
-          {soldOut ? "Sold out" : "Live"}
-        </span>
-        <span className="market-drop-title">
-          <strong>{drop.title}</strong>
-          <small>by {drop.creator}</small>
+          {isGenesisDrop(drop) ? "Genesis · #1" : soldOut ? "Sold out" : "Live"}
         </span>
       </button>
-
+      <button className={isSaved ? "save-drop saved" : "save-drop"} type="button" aria-label={`${isSaved ? "Unsave" : "Save"} ${drop.title}`} aria-pressed={isSaved} onClick={onToggleSaved}><RoomIcon name="heart" /></button>
       <div className="market-drop-body">
+        <button className="room-card-title" type="button" onClick={onSelect}><strong title={drop.title}>{drop.title}</strong><small>{isGenesisDrop(drop) ? "By Droproom · Original" : `by ${drop.creator}`}</small></button>
         <div className="drop-stat-row">
           <div>
             <small>Price</small>
@@ -1482,16 +1374,14 @@ function LiveDropCard({
           </div>
         </div>
         <div className="drop-progress-copy">
-          <span>{drop.minted} minted</span>
-          <span>{drop.edition} total</span>
+          <span>{drop.minted} / {drop.edition} collected</span>
         </div>
         <div className="progress-track">
           <span style={{ width: `${progress}%` }} />
         </div>
         <div className="drop-card-actions">
-          <button className="secondary-button" onClick={onSelect} type="button">Details</button>
-          <button className="primary-button" disabled={soldOut || isOwned || isMinting} onClick={onMint} type="button">
-            {soldOut ? "Sold out" : isOwned ? "Owned" : isMinting ? "Minting..." : "Mint Now"}
+          <button className="primary-button" disabled={drop.status !== "live" || soldOut || isOwned || isMinting} onClick={onMint} type="button">
+            {soldOut ? "Sold out" : drop.status !== "live" ? "Paused" : isOwned ? "Collected" : isMinting ? "Collecting…" : "Collect"}<span aria-hidden="true">↗</span>
           </button>
         </div>
       </div>
@@ -1499,45 +1389,11 @@ function LiveDropCard({
   );
 }
 
-function CreateCta({ onCreate, onDashboard }: { onCreate: () => void; onDashboard: () => void }) {
-  return (
-    <section className="section-wrap" id="create">
-      <div className="create-cta">
-        <div className="create-cta-copy">
-          <h2>
-            Ready to drop
-            <br />
-            your collection?
-          </h2>
-          <p>
-            Set up your artwork, define supply and price, upload metadata to IPFS, then publish the drop with a real Base
-            transaction.
-          </p>
-          <div className="hero-actions">
-            <button className="primary-button light" onClick={onCreate} type="button">Create Drop</button>
-            <button className="secondary-button light" onClick={onDashboard} type="button">Creator Dashboard</button>
-          </div>
-        </div>
-        <div className="create-steps" aria-label="Create flow">
-          <div>
-            <span>1</span>
-            <strong>Upload Assets</strong>
-            <small>Images, GIFs, AI variations, and metadata.</small>
-          </div>
-          <div>
-            <span>2</span>
-            <strong>Set Rules</strong>
-            <small>Supply, free or paid mint, and review checks.</small>
-          </div>
-          <div>
-            <span>3</span>
-            <strong>Launch</strong>
-            <small>Publish on Base and share the live mint page.</small>
-          </div>
-        </div>
-      </div>
-    </section>
-  );
+function CreateCta({ onCreate }: { onCreate: () => void }) {
+  return <section className="section-wrap room-invite" id="create">
+    <div><span className="eyebrow">THERE’S ROOM FOR YOUR IDEA</span><h2>Made by you. Collected by someone.</h2><p>A photo, a doodle, a wild idea. Turn it into your next drop.</p></div>
+    <button type="button" className="primary-button" onClick={onCreate}>Make a drop <span>↗</span></button>
+  </section>;
 }
 
 function CollectionsSection({ drops, onSelect }: { drops: Drop[]; onSelect: (id: string) => void }) {
@@ -1545,8 +1401,9 @@ function CollectionsSection({ drops, onSelect }: { drops: Drop[]; onSelect: (id:
     <section className="section-wrap collections-section" id="collections">
       <div className="section-heading">
         <div>
-          <h2>Community favorites</h2>
-          <p>Named collections, ordered by editions minted.</p>
+          <p className="eyebrow">WORTH ANOTHER LOOK</p>
+          <h2>Room favorites<span className="heading-dot">.</span></h2>
+          <p>Our original first, followed by the most collected.</p>
         </div>
       </div>
       {drops.length ? (
@@ -1569,7 +1426,7 @@ function CollectionsSection({ drops, onSelect }: { drops: Drop[]; onSelect: (id:
           ))}
         </div>
       ) : (
-        <div className="empty-state">Trending collections appear after live indexed drops are available.</div>
+        <div className="empty-state">Community favorites will appear here.</div>
       )}
     </section>
   );
@@ -1711,7 +1568,7 @@ function DropDetail({
           <span style={{ width: `${progress}%` }} />
         </div>
         <button className="primary-button wide" disabled={drop.status !== "live" || soldOut || isOwned || isMinting} onClick={onMint} type="button">
-          {soldOut ? "Sold out" : drop.status !== "live" ? "Mint unavailable" : isOwned ? "Collected" : isMinting ? "Minting..." : isWalletConnected ? "Mint on Base" : "Connect Base Wallet"} <span>Base</span>
+          {soldOut ? "Sold out" : drop.status !== "live" ? "Collecting paused" : isOwned ? "Collected" : isMinting ? "Collecting…" : isWalletConnected ? "Collect on Base" : "Connect to collect"} <span>↗</span>
         </button>
         <p className="microcopy">
           Free mint means NFT price is 0. Network gas is paid by your connected Base Account.
@@ -1819,28 +1676,6 @@ function GenesisEmptyState({ onCreate }: { onCreate: () => void }) {
   );
 }
 
-function SoldOutShowcase({ drops, onSelect }: { drops: Drop[]; onSelect: (id: string) => void }) {
-  return (
-    <section className="sold-out-showcase">
-      <div>
-        <p className="eyebrow">Sold-out rooms</p>
-        <h2>Completed drops keep their spotlight.</h2>
-      </div>
-      <div className="sold-out-strip">
-        {drops.map((drop) => (
-          <button key={drop.id} onClick={() => onSelect(drop.id)} type="button">
-            <span className="sold-out-art">
-              <ArtworkMedia alt={drop.title} src={drop.image} />
-            </span>
-            <span>{drop.title}</span>
-            <small>{drop.edition}/{drop.edition} collected</small>
-          </button>
-        ))}
-      </div>
-    </section>
-  );
-}
-
 function CreateFlow(props: {
   aiImages: string[];
   aiLoading: boolean;
@@ -1867,13 +1702,12 @@ function CreateFlow(props: {
       <section className="create-start">
         <div>
           <p className="eyebrow">Create NFT</p>
-          <h1>Your idea. Your first drop.</h1>
-          <p>Upload a favorite image, design a card, or try AI. Start with 10 editions and make it yours.</p>
+          <h1>Something only<br /><span className="studio-accent">you would make.</span></h1>
+          <p>Pick a starting point. Make it yours. Drop it on Base.</p>
         </div>
-        <CreatorPolicyNotice />
         <div className="start-grid">
           <StartCard icon={<i aria-hidden="true" className="mode-glyph upload-glyph" />} label="Upload artwork" onClick={() => props.onBegin("upload")} text="Bring a PNG, JPG, WEBP, or one-second GIF and turn it into a Base drop." />
-          <StartCard icon={<i aria-hidden="true" className="mode-glyph canvas-glyph" />} label="Start from blank" onClick={() => props.onBegin("blank")} text="Build a simple card with background, frame, title, and preview." />
+          <StartCard icon={<i aria-hidden="true" className="mode-glyph canvas-glyph" />} label="Design a card" onClick={() => props.onBegin("blank")} text="Orbit, Bloom or Signal. Pick a look, add your words, make it yours." />
           <StartCard icon={<i aria-hidden="true" className="mode-glyph ai-glyph" />} label="Generate with AI" onClick={() => props.onBegin("ai")} text="Prompt + style chips, 4 image variations, 10 AI jobs per day." />
         </div>
       </section>
@@ -1906,7 +1740,7 @@ function CreateFlow(props: {
               key={mode}
               onClick={() => {
                 props.onStartMode(mode);
-                if (mode === "blank") props.onUpdateDraft((current) => ({ ...current, image: createBlankArtwork(current.title, current.background) }));
+                if (mode === "blank") props.onUpdateDraft((current) => ({ ...current, image: createBlankArtwork(current.overlayText || current.title, current.background, current.frame) }));
               }}
               type="button"
             >
@@ -1952,7 +1786,7 @@ function CreateFlow(props: {
 
         <label className="field">
           <span>Title</span>
-          <input maxLength={64} placeholder="Give your drop a name" onChange={(event) => props.onUpdateDraft((current) => ({ ...current, title: event.target.value, image: props.startMode === "blank" ? createBlankArtwork(current.overlayText || event.target.value, current.background) : current.image }))} value={props.draft.title} />
+          <input maxLength={64} placeholder="Give your drop a name" onChange={(event) => props.onUpdateDraft((current) => ({ ...current, title: event.target.value, image: props.startMode === "blank" ? createBlankArtwork(current.overlayText || event.target.value, current.background, current.frame) : current.image }))} value={props.draft.title} />
         </label>
         <label className="field">
           <span>Description</span>
@@ -1960,6 +1794,9 @@ function CreateFlow(props: {
         </label>
         {props.startMode === "blank" ? (
           <>
+            <div className="card-templates" role="group" aria-label="Card design">
+              {CARD_TEMPLATES.map((template) => <button className={props.draft.frame === template.id ? "template-choice active" : "template-choice"} key={template.id} type="button" aria-pressed={props.draft.frame === template.id} onClick={() => props.onUpdateDraft((current) => ({ ...current, frame: template.id, background: template.color, image: createBlankArtwork(current.overlayText || current.title, template.color, template.id) }))}><span className="template-art"><ArtworkMedia alt={`${template.label} card design`} src={createBlankArtwork(template.label, template.color, template.id)} /></span><strong>{template.label}</strong></button>)}
+            </div>
             <label className="field">
               <span>Background color</span>
               <input
@@ -1967,7 +1804,7 @@ function CreateFlow(props: {
                   props.onUpdateDraft((current) => ({
                     ...current,
                     background: event.target.value,
-                    image: createBlankArtwork(current.overlayText || current.title, event.target.value)
+                    image: createBlankArtwork(current.overlayText || current.title, event.target.value, current.frame)
                   }))
                 }
                 type="color"
@@ -1977,7 +1814,8 @@ function CreateFlow(props: {
             <label className="field">
               <span>Card label</span>
               <input
-                onChange={(event) => props.onUpdateDraft((current) => ({ ...current, overlayText: event.target.value, image: createBlankArtwork(event.target.value || current.title, current.background) }))}
+                maxLength={18}
+                onChange={(event) => props.onUpdateDraft((current) => ({ ...current, overlayText: event.target.value, image: createBlankArtwork(event.target.value || current.title, current.background, current.frame) }))}
                 placeholder="Optional text on the artwork"
                 value={props.draft.overlayText}
               />
